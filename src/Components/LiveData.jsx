@@ -63,15 +63,15 @@ const LiveData = () => {
   }
 
   return (
-    <div className="min-h-screen bg-linear-to-br from-gray-50 to-gray-100 px-4 py-12 pt-24">
+    <div className="min-h-screen bg-linear-to-br from-gray-50 to-gray-100 px-3 py-8 pt-20 sm:px-4 sm:py-12 sm:pt-24">
       <div className="mx-auto max-w-6xl">
-        <div className="text-center mb-12">
-          <div className="flex items-center mt-5 justify-center gap-3 mb-3">
+        <div className="mb-8 text-center sm:mb-12">
+          <div className="mt-3 mb-2 flex items-center justify-center gap-2 sm:mt-5 sm:mb-3 sm:gap-3">
             <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
             <span className="text-sm font-semibold text-green-600">LIVE</span>
           </div>
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">Live Voting Results</h1>
-          <p className="text-lg text-gray-600">Real-time vote tracking for all positions</p>
+          <h1 className="mb-2 text-2xl font-bold text-gray-900 sm:text-4xl">Live Voting Results</h1>
+          <p className="text-sm text-gray-600 sm:text-lg">Real-time vote tracking for all positions</p>
         </div>
 
         {resultsError && (
@@ -81,27 +81,27 @@ const LiveData = () => {
         )}
 
         {isLoadingResults ? (
-          <div className="rounded-3xl border border-gray-200 bg-white px-6 py-12 text-center text-sm text-gray-600 shadow-lg">
+          <div className="rounded-2xl border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-600 shadow-lg sm:rounded-3xl sm:px-6 sm:py-12">
             Loading live results...
           </div>
         ) : (
 
-        <div className="space-y-8">
+        <div className="space-y-5 sm:space-y-8">
           {Object.entries(results).map(([position, candidates]) => {
             if (candidates.length === 0) {
               return (
-                <div key={position} className="bg-white rounded-3xl shadow-lg overflow-hidden">
-                  <div className="bg-linear-to-r from-indigo-600 to-indigo-700 px-6 py-4">
-                    <div className="flex items-center justify-between">
-                      <h2 className="text-2xl font-bold text-white">{position}</h2>
+                <div key={position} className="overflow-hidden rounded-2xl bg-white shadow-lg sm:rounded-3xl">
+                  <div className="bg-linear-to-r from-indigo-600 to-indigo-700 px-4 py-3 sm:px-6 sm:py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h2 className="text-lg font-bold text-white sm:text-2xl">{position}</h2>
                       <div className="text-right">
                         <p className="text-indigo-100 text-sm">Total Votes</p>
-                        <p className="text-3xl font-bold text-white">0</p>
+                        <p className="text-2xl font-bold text-white sm:text-3xl">0</p>
                       </div>
                     </div>
                   </div>
 
-                  <div className="p-6 text-sm text-gray-600">No candidates or votes recorded for this position yet.</div>
+                  <div className="p-4 text-sm text-gray-600 sm:p-6">No candidates or votes recorded for this position yet.</div>
                 </div>
               )
             }
@@ -111,29 +111,29 @@ const LiveData = () => {
             const sortedCandidates = [...candidates].sort((a, b) => b.votes - a.votes)
 
             return (
-              <div key={position} className="bg-white rounded-3xl shadow-lg overflow-hidden">
-                <div className="bg-linear-to-r from-indigo-600 to-indigo-700 px-6 py-4">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-2xl font-bold text-white">{position}</h2>
+              <div key={position} className="overflow-hidden rounded-2xl bg-white shadow-lg sm:rounded-3xl">
+                <div className="bg-linear-to-r from-indigo-600 to-indigo-700 px-4 py-3 sm:px-6 sm:py-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-lg font-bold text-white sm:text-2xl">{position}</h2>
                     <div className="text-right">
                       <p className="text-indigo-100 text-sm">Total Votes</p>
-                      <p className="text-3xl font-bold text-white">{total}</p>
+                      <p className="text-2xl font-bold text-white sm:text-3xl">{total}</p>
                     </div>
                   </div>
                 </div>
 
-                <div className="p-6 space-y-4">
+                <div className="space-y-3 p-4 sm:space-y-4 sm:p-6">
                   {sortedCandidates.map((candidate, index) => {
                     const percentage = getPercentage(candidate.votes, total)
                     const isLeader = candidate.id === leader.id
 
                     return (
                       <div key={candidate.id} className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="text-lg font-bold text-gray-400 w-8">#{index + 1}</div>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-start gap-2 sm:gap-3">
+                            <div className="w-6 text-sm font-bold text-gray-400 sm:w-8 sm:text-lg">#{index + 1}</div>
                             <div>
-                              <p className={`font-semibold ${isLeader ? 'text-indigo-600' : 'text-gray-900'}`}>
+                              <p className={`text-sm font-semibold sm:text-base ${isLeader ? 'text-indigo-600' : 'text-gray-900'}`}>
                                 {candidate.name}
                               </p>
                               {isLeader && (
@@ -141,13 +141,13 @@ const LiveData = () => {
                               )}
                             </div>
                           </div>
-                          <div className="text-right">
-                            <p className="font-bold text-gray-900">{candidate.votes} votes</p>
+                          <div className="shrink-0 text-right">
+                            <p className="text-sm font-bold text-gray-900 sm:text-base">{candidate.votes} votes</p>
                             <p className="text-sm font-semibold text-indigo-600">{percentage}%</p>
                           </div>
                         </div>
 
-                        <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                        <div className="h-2.5 w-full overflow-hidden rounded-full bg-gray-200 sm:h-3">
                           <div
                             className={`h-full rounded-full transition-all duration-500 ${
                               isLeader
@@ -167,7 +167,7 @@ const LiveData = () => {
         </div>
         )}
 
-        <div className="mt-12 text-center text-sm text-gray-600">
+        <div className="mt-8 text-center text-sm text-gray-600 sm:mt-12">
           <p>Results reflect saved votes in Firestore.</p>
         </div>
       </div>

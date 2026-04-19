@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { signInAdmin } from '../utils/adminAuth'
+import logo from '../assets/logo.png'
 
 const NavBar = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
@@ -53,7 +54,7 @@ const NavBar = () => {
           onClick={() => navigate('/')}
         >
           <img
-            src="/src/assets/logo.png"
+            src={logo}
             alt="TEIN Greenfield Logo"
             className="w-16 h-16 rounded-full object-contain"
           />
