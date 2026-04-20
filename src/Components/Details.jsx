@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { useNavigate } from 'react-router-dom'
 import { functions } from '../firebase'
+import { getBrowserId } from '../utils/browser'
 
 const Details = () => {
   const navigate = useNavigate()
@@ -30,6 +31,7 @@ const Details = () => {
       const response = await verifyStudent({
         fullName: trimmedName,
         studentId: trimmedId,
+        browserId: getBrowserId(),
       })
 
       const studentRecord = response.data.student

@@ -42,8 +42,18 @@ export const buildResultsByPosition = (candidates, votes) => {
   return results
 }
 
-export const getTotalVotesForResults = (results) =>
-  Object.values(results).reduce(
+export const getTotalVotesForResults = (results, votes) => {
+  // If votes array is provided, count the number of votes (documents)
+  if (Array.isArray(votes)) {
+    return votes.length
+  }
+  
+  // Fallback: count unique votes by dividing total selections by number of positions
+  const totalVoteSelections = Object.values(results).reduce(
     (sum, candidates) => sum + candidates.reduce((candidateSum, candidate) => candidateSum + candidate.votes, 0),
     0
   )
+  
+  // Each vote has selections for all positions, so divide by number of positions
+  return totalVoteSelections > 0 ? Math.ceil(totalVoteSelections / Object.keys(results).length) : 0
+}

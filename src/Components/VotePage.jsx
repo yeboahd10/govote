@@ -4,6 +4,7 @@ import { collection, getDocs } from 'firebase/firestore'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { db, functions } from '../firebase'
 import { candidatePositions } from '../constants/candidates'
+import { getBrowserId } from '../utils/browser'
 
 const VotePage = () => {
   const navigate = useNavigate()
@@ -18,6 +19,7 @@ const VotePage = () => {
   const [candidateError, setCandidateError] = useState('')
   const [submitError, setSubmitError] = useState('')
   const [isSubmittingVote, setIsSubmittingVote] = useState(false)
+  const visiblePositions = candidatePositions.filter((position) => (candidatesByPosition[position] ?? []).length > 0)
 
   const handleSelectCandidate = (position, candidateId) => {
     setSelectedCandidates((prev) => ({
@@ -87,7 +89,13 @@ const VotePage = () => {
       return
     }
 
-    const requiredPositions = candidatePositions.filter((position) => (candidatesByPosition[position] ?? []).length > 0)
+    const requiredPositions = visiblePositions
+
+    if (requiredPositions.length === 0) {
+      setSubmitError('Voting is not open yet. No candidates have been added.')
+      return
+    }
+
     const missingPositions = requiredPositions.filter((position) => !selectedCandidates[position])
 
     if (missingPositions.length > 0) {
@@ -102,6 +110,7 @@ const VotePage = () => {
       await submitVote({
         fullName: student.name,
         studentId: student.studentId,
+        browserId: getBrowserId(),
         selections: requiredPositions.reduce((accumulator, position) => ({
           ...accumulator,
           [position]: selectedCandidates[position],
@@ -130,7 +139,7 @@ const VotePage = () => {
         </div>
         <h1 className="text-3xl font-bold text-gray-900 mb-1 text-center">Cast Your Vote</h1>
         <p className="text-base text-gray-600 mb-8 text-center">
-          Select one candidate for each position
+          Select one candidate for each available position
         </p>
 
         {candidateError && (
@@ -151,9 +160,15 @@ const VotePage = () => {
           </div>
         )}
 
-        {!isLoadingCandidates && (
+        {!isLoadingCandidates && visiblePositions.length === 0 && (
+          <div className="mb-8 rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-600 text-center">
+            Voting is not open yet. No candidates have been added.
+          </div>
+        )}
+
+        {!isLoadingCandidates && visiblePositions.length > 0 && (
         <div className="space-y-8">
-          {candidatePositions.map((position) => {
+          {visiblePositions.map((position) => {
             const positionCandidates = candidatesByPosition[position] ?? []
 
             return (
@@ -165,11 +180,6 @@ const VotePage = () => {
                 <div className="h-1 w-16 bg-indigo-600 rounded-full mt-1.5"></div>
               </div>
 
-              {positionCandidates.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-600">
-                  No candidates added for this position yet.
-                </div>
-              ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                 {positionCandidates.map((candidate) => (
                   <div
@@ -207,7 +217,6 @@ const VotePage = () => {
                   </div>
                 ))}
               </div>
-              )}
             </div>
           )})}
         </div>
@@ -216,7 +225,7 @@ const VotePage = () => {
         <div className="mt-12 flex justify-center">
           <button
             onClick={handleSubmitVote}
-            disabled={isLoadingCandidates || isSubmittingVote}
+            disabled={isLoadingCandidates || isSubmittingVote || visiblePositions.length === 0}
             className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-10 rounded-3xl text-base transition duration-300 shadow-lg disabled:opacity-70"
           >
             {isSubmittingVote ? 'Submitting...' : 'Submit Vote'}

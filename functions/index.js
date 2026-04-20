@@ -1,4 +1,5 @@
 import admin from 'firebase-admin';
+import { createHash } from 'node:crypto';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 
 admin.initializeApp();
@@ -9,11 +10,16 @@ const candidatePositions = [
   'President',
   'Vice President',
   'Secretary',
+  'Deputy Secretary',
+  'Treasurer',
+  'Deputy Treasurer',
   'Organizer',
+  "Women's Organizer",
   'Deputy Organizer',
   'Wocom',
   'Deputy Wocom',
   'Communication Officer',
+  'Deputy Communications Officer',
 ];
 
 const removeInvisibleChars = (value) =>
@@ -21,13 +27,39 @@ const removeInvisibleChars = (value) =>
 
 const normalizeSpaces = (value) => removeInvisibleChars(value).replace(/\s+/g, ' ').trim();
 
-const normalizeName = (name) => normalizeSpaces(name).toLowerCase();
+const normalizeName = (name) => {
+  const normalized = normalizeSpaces(name).toLowerCase();
+  // Split name into words, sort them alphabetically, and rejoin
+  // This makes "John Doe" equal to "Doe John"
+  return normalized
+    .split(/\s+/)
+    .sort()
+    .join(' ');
+};
 
 const normalizeStudentId = (studentId) =>
   normalizeSpaces(studentId)
     .toUpperCase()
     .replace(/\s*\/\s*/g, '/')
     .replace(/\.+$/g, '');
+
+const normalizeBrowserId = (browserId) => normalizeSpaces(browserId).toLowerCase();
+
+const buildBrowserLockId = (browserId) =>
+  createHash('sha256').update(browserId).digest('hex');
+
+const getRequestIp = (request) => {
+  const forwardedFor = request.rawRequest?.headers['x-forwarded-for'];
+
+  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+    return forwardedFor.split(',')[0].trim();
+  }
+
+  return request.rawRequest?.ip || request.rawRequest?.socket?.remoteAddress || '';
+};
+
+const getUserAgent = (request) =>
+  normalizeSpaces(request.rawRequest?.headers['user-agent'] || '');
 
 const ensureAdmin = async (uid) => {
   if (!uid) {
@@ -44,9 +76,23 @@ const ensureAdmin = async (uid) => {
 export const verifyStudent = onCall(async (request) => {
   const fullName = normalizeSpaces(request.data?.fullName);
   const studentId = normalizeStudentId(request.data?.studentId);
+  const browserId = normalizeBrowserId(request.data?.browserId);
 
   if (!fullName || !studentId) {
     throw new HttpsError('invalid-argument', 'Please enter both full name and student ID.');
+  }
+
+  if (!browserId) {
+    throw new HttpsError('invalid-argument', 'This browser could not be verified. Refresh and try again.');
+  }
+
+  const browserLockSnapshot = await db
+    .collection('browserVoteLocks')
+    .doc(buildBrowserLockId(browserId))
+    .get();
+
+  if (browserLockSnapshot.exists) {
+    throw new HttpsError('already-exists', 'This browser has already submitted a vote.');
   }
 
   const snapshot = await db
@@ -82,11 +128,16 @@ export const verifyStudent = onCall(async (request) => {
 export const submitVote = onCall(async (request) => {
   const fullName = normalizeSpaces(request.data?.fullName);
   const studentId = normalizeStudentId(request.data?.studentId);
+  const browserId = normalizeBrowserId(request.data?.browserId);
   const selections = request.data?.selections || {};
+  const ipAddress = getRequestIp(request);
+  const userAgent = getUserAgent(request);
 
-  if (!fullName || !studentId || typeof selections !== 'object') {
+  if (!fullName || !studentId || !browserId || typeof selections !== 'object') {
     throw new HttpsError('invalid-argument', 'A valid student identity and selections are required.');
   }
+
+  const browserLockRef = db.collection('browserVoteLocks').doc(buildBrowserLockId(browserId));
 
   const studentSnapshot = await db
     .collection('students')
@@ -133,17 +184,38 @@ export const submitVote = onCall(async (request) => {
   }
 
   await db.runTransaction(async (transaction) => {
-    const freshStudentSnapshot = await transaction.get(studentDoc.ref);
+    const [freshStudentSnapshot, browserLockSnapshot] = await Promise.all([
+      transaction.get(studentDoc.ref),
+      transaction.get(browserLockRef),
+    ]);
     const freshStudent = freshStudentSnapshot.data();
 
     if (!freshStudent || freshStudent.hasVoted) {
       throw new HttpsError('already-exists', 'This student has already voted.');
     }
 
+    if (browserLockSnapshot.exists) {
+      throw new HttpsError('already-exists', 'This browser has already submitted a vote.');
+    }
+
     transaction.set(db.collection('votes').doc(studentDoc.id), {
       studentId: student.studentId,
       studentName: student.name,
       selections,
+      browserIdNormalized: browserId,
+      ipAddress,
+      userAgent,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    transaction.set(browserLockRef, {
+      studentId: student.studentId,
+      studentName: student.name,
+      voteId: studentDoc.id,
+      browserIdNormalized: browserId,
+      ipAddress,
+      userAgent,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -161,9 +233,10 @@ export const submitVote = onCall(async (request) => {
 export const resetVoting = onCall(async (request) => {
   await ensureAdmin(request.auth?.uid);
 
-  const [votesSnapshot, studentsSnapshot] = await Promise.all([
+  const [votesSnapshot, studentsSnapshot, browserLocksSnapshot] = await Promise.all([
     db.collection('votes').get(),
     db.collection('students').get(),
+    db.collection('browserVoteLocks').get(),
   ]);
 
   let batch = db.batch();
@@ -181,6 +254,11 @@ export const resetVoting = onCall(async (request) => {
 
   votesSnapshot.docs.forEach((voteDoc) => {
     batch.delete(voteDoc.ref);
+    queueOperation();
+  });
+
+  browserLocksSnapshot.docs.forEach((browserLockDoc) => {
+    batch.delete(browserLockDoc.ref);
     queueOperation();
   });
 

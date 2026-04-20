@@ -3,8 +3,15 @@ const removeInvisibleChars = (value) =>
 
 const normalizeSpaces = (value) => value.replace(/\s+/g, ' ').trim();
 
-export const normalizeName = (name) =>
-  normalizeSpaces(removeInvisibleChars(name)).toLowerCase();
+export const normalizeName = (name) => {
+  const normalized = normalizeSpaces(removeInvisibleChars(name)).toLowerCase();
+  // Split name into words, sort them alphabetically, and rejoin
+  // This makes "John Doe" equal to "Doe John"
+  return normalized
+    .split(/\s+/)
+    .sort()
+    .join(' ');
+};
 
 export const normalizeStudentId = (studentId) =>
   normalizeSpaces(removeInvisibleChars(studentId))

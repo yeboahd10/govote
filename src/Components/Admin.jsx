@@ -33,8 +33,11 @@ const Admin = () => {
   const [candidateName, setCandidateName] = useState('')
   const [candidatePosition, setCandidatePosition] = useState(candidatePositions[0])
   const [candidatePhoto, setCandidatePhoto] = useState(null)
+  const [editingCandidateId, setEditingCandidateId] = useState('')
+  const [editingCandidateImageUrl, setEditingCandidateImageUrl] = useState('')
   const [voterPage, setVoterPage] = useState(1)
   const [results, setResults] = useState({})
+  const [votes, setVotes] = useState([])
   const [resultsMessage, setResultsMessage] = useState('')
   const [isResettingVotes, setIsResettingVotes] = useState(false)
 
@@ -43,7 +46,7 @@ const Admin = () => {
   const paginatedStudents = students.slice((voterPage - 1) * votersPerPage, voterPage * votersPerPage)
 
   const stats = {
-    totalVotes: getTotalVotesForResults(results),
+    totalVotes: getTotalVotesForResults(results, votes),
     activeVoters: students.length,
     totalCandidates: candidates.length,
     positions: candidatePositions.length,
@@ -125,6 +128,7 @@ const Admin = () => {
       const voteRows = voteSnapshot.docs.map((voteDoc) => voteDoc.data())
       const candidateRows = candidateSource && candidateSource.length > 0 ? candidateSource : await loadCandidates()
 
+      setVotes(voteRows)
       setResults(buildResultsByPosition(candidateRows, voteRows))
     } catch (loadError) {
       console.error('Failed to load voting results:', loadError)
@@ -165,42 +169,78 @@ const Admin = () => {
 
   const closeCandidateModal = () => {
     setIsCandidateModalOpen(false)
+    setEditingCandidateId('')
+    setEditingCandidateImageUrl('')
     setCandidateName('')
     setCandidatePosition(candidatePositions[0])
     setCandidatePhoto(null)
   }
 
-  const handleAddCandidate = async (e) => {
+  const openEditCandidateModal = (candidate) => {
+    setEditingCandidateId(candidate.id)
+    setEditingCandidateImageUrl(candidate.imageUrl ?? '')
+    setCandidateName(candidate.name)
+    setCandidatePosition(candidate.position)
+    setCandidatePhoto(null)
+    setIsCandidateModalOpen(true)
+  }
+
+  const handleSaveCandidate = async (e) => {
     e.preventDefault()
     setCandidateMessage('')
 
     const fullName = candidateName.trim()
+    const isEditingCandidate = Boolean(editingCandidateId)
 
-    if (!fullName || !candidatePosition || !candidatePhoto) {
-      setCandidateMessage('Enter full name, choose a position, and select a picture.')
+    if (!fullName || !candidatePosition || (!isEditingCandidate && !candidatePhoto)) {
+      setCandidateMessage('Enter full name, choose a position, and select a picture for new candidates.')
       return
     }
 
     setIsSavingCandidate(true)
 
     try {
-      const safeFileName = `${Date.now()}-${candidatePhoto.name.replace(/[^a-zA-Z0-9.-]/g, '-')}`
-      const imageRef = ref(storage, `candidates/${safeFileName}`)
+      let nextImageUrl = editingCandidateImageUrl
+      let nextImagePath
 
-      await uploadBytes(imageRef, candidatePhoto)
-      const imageUrl = await getDownloadURL(imageRef)
+      if (candidatePhoto) {
+        const safeFileName = `${Date.now()}-${candidatePhoto.name.replace(/[^a-zA-Z0-9.-]/g, '-')}`
+        const imageRef = ref(storage, `candidates/${safeFileName}`)
+        await uploadBytes(imageRef, candidatePhoto)
+        nextImageUrl = await getDownloadURL(imageRef)
+        nextImagePath = imageRef.fullPath
+      }
 
-      await addDoc(collection(db, 'candidates'), {
-        name: fullName,
-        position: candidatePosition,
-        imageUrl,
-        imagePath: imageRef.fullPath,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      })
+      if (isEditingCandidate) {
+        const updatePayload = {
+          name: fullName,
+          position: candidatePosition,
+          updatedAt: serverTimestamp(),
+        }
+
+        if (nextImageUrl) {
+          updatePayload.imageUrl = nextImageUrl
+        }
+
+        if (nextImagePath) {
+          updatePayload.imagePath = nextImagePath
+        }
+
+        await updateDoc(doc(db, 'candidates', editingCandidateId), updatePayload)
+        setCandidateMessage('Candidate updated successfully.')
+      } else {
+        await addDoc(collection(db, 'candidates'), {
+          name: fullName,
+          position: candidatePosition,
+          imageUrl: nextImageUrl,
+          imagePath: nextImagePath ?? '',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+        setCandidateMessage('Candidate added successfully.')
+      }
 
       closeCandidateModal()
-      setCandidateMessage('Candidate added successfully.')
       await loadCandidates()
     } catch (saveCandidateError) {
       console.error('Failed to save candidate:', saveCandidateError)
@@ -604,6 +644,12 @@ const Admin = () => {
                           <p className="text-sm text-gray-600">{candidate.position}</p>
                         </div>
                       </div>
+                      <button
+                        onClick={() => openEditCandidateModal(candidate)}
+                        className="text-sm font-semibold text-indigo-600 hover:text-indigo-800"
+                      >
+                        Edit
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -611,10 +657,16 @@ const Admin = () => {
                 {isCandidateModalOpen && (
                   <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-3 sm:p-4">
                     <div className="w-full max-w-lg bg-white rounded-2xl sm:rounded-3xl shadow-2xl p-4 sm:p-6 max-h-[92vh] overflow-y-auto">
-                      <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-2">Add Candidate</h3>
-                      <p className="text-sm text-gray-600 mb-6">Add a candidate with a position and profile picture.</p>
+                      <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-2">
+                        {editingCandidateId ? 'Edit Candidate' : 'Add Candidate'}
+                      </h3>
+                      <p className="text-sm text-gray-600 mb-6">
+                        {editingCandidateId
+                          ? 'Update candidate details. Upload a new picture only if you want to replace the current one.'
+                          : 'Add a candidate with a position and profile picture.'}
+                      </p>
 
-                      <form className="space-y-4" onSubmit={handleAddCandidate}>
+                      <form className="space-y-4" onSubmit={handleSaveCandidate}>
                         <div>
                           <label className="block text-sm font-semibold text-gray-700 mb-2" htmlFor="candidate-name">
                             Full Name
@@ -647,8 +699,15 @@ const Admin = () => {
 
                         <div>
                           <label className="block text-sm font-semibold text-gray-700 mb-2" htmlFor="candidate-photo">
-                            Picture
+                            {editingCandidateId ? 'Picture (Optional)' : 'Picture'}
                           </label>
+                          {editingCandidateId && editingCandidateImageUrl && (
+                            <img
+                              src={editingCandidateImageUrl}
+                              alt="Current candidate"
+                              className="w-16 h-16 rounded-full object-cover mb-3"
+                            />
+                          )}
                           <input
                             id="candidate-photo"
                             type="file"
@@ -671,7 +730,7 @@ const Admin = () => {
                             disabled={isSavingCandidate}
                             className="px-5 py-2 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-700 transition disabled:opacity-70"
                           >
-                            {isSavingCandidate ? 'Saving...' : 'Save Candidate'}
+                            {isSavingCandidate ? 'Saving...' : editingCandidateId ? 'Save Changes' : 'Save Candidate'}
                           </button>
                         </div>
                       </form>
