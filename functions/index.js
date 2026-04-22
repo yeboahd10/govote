@@ -92,7 +92,7 @@ export const verifyStudent = onCall(async (request) => {
     .get();
 
   if (browserLockSnapshot.exists) {
-    throw new HttpsError('already-exists', 'This browser has already submitted a vote.');
+    throw new HttpsError('already-exists', 'You have voted already');
   }
 
   const snapshot = await db
@@ -195,7 +195,7 @@ export const submitVote = onCall(async (request) => {
     }
 
     if (browserLockSnapshot.exists) {
-      throw new HttpsError('already-exists', 'This browser has already submitted a vote.');
+      throw new HttpsError('already-exists', 'You have voted already');
     }
 
     transaction.set(db.collection('votes').doc(studentDoc.id), {

@@ -363,9 +363,10 @@ const Admin = () => {
     setIsResettingVotes(true)
 
     const resetFromClient = async () => {
-      const [votesSnapshot, studentsSnapshot] = await Promise.all([
+      const [votesSnapshot, studentsSnapshot, browserLocksSnapshot] = await Promise.all([
         getDocs(collection(db, 'votes')),
         getDocs(collection(db, 'students')),
+        getDocs(collection(db, 'browserVoteLocks')),
       ])
 
       let batch = writeBatch(db)
@@ -382,6 +383,12 @@ const Admin = () => {
 
       for (const voteDoc of votesSnapshot.docs) {
         batch.delete(voteDoc.ref)
+        operations += 1
+        await queueCommit()
+      }
+
+      for (const browserLockDoc of browserLocksSnapshot.docs) {
+        batch.delete(browserLockDoc.ref)
         operations += 1
         await queueCommit()
       }
