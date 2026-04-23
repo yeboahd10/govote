@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { addDoc, collection, deleteDoc, doc, getDocs, limit, query, serverTimestamp, updateDoc, where, writeBatch } from 'firebase/firestore'
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, limit, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
 import jsPDF from 'jspdf'
@@ -44,6 +44,7 @@ const Admin = () => {
   const [votes, setVotes] = useState([])
   const [resultsMessage, setResultsMessage] = useState('')
   const [isResettingVotes, setIsResettingVotes] = useState(false)
+  const [isDeletingStudent, setIsDeletingStudent] = useState(false)
 
   const votersPerPage = 10
   const totalVoterPages = Math.max(1, Math.ceil(students.length / votersPerPage))
@@ -56,8 +57,14 @@ const Admin = () => {
     positions: candidatePositions.length,
   }
 
-  const toggleVoting = () => {
-    setVotingStatus(votingStatus === 'active' ? 'paused' : 'active')
+  const toggleVoting = async () => {
+    const nextStatus = votingStatus === 'active' ? 'paused' : 'active'
+    setVotingStatus(nextStatus)
+    try {
+      await setDoc(doc(db, 'settings', 'voting'), { status: nextStatus }, { merge: true })
+    } catch (toggleError) {
+      console.error('Failed to persist voting status:', toggleError)
+    }
   }
 
   const loadStudents = useCallback(async () => {
@@ -150,6 +157,15 @@ const Admin = () => {
       if (!adminAllowed) {
         navigate('/')
         return
+      }
+
+      try {
+        const votingSettingsDoc = await getDoc(doc(db, 'settings', 'voting'))
+        if (votingSettingsDoc.exists()) {
+          setVotingStatus(votingSettingsDoc.data().status ?? 'active')
+        }
+      } catch (settingsError) {
+        console.error('Failed to load voting status:', settingsError)
       }
 
       const candidateRows = await loadCandidates()
@@ -442,6 +458,32 @@ const Admin = () => {
       setVoterMessage('Failed to update student. Check Firebase permissions.')
     } finally {
       setIsUpdatingStudent(false)
+    }
+  }
+
+  const handleDeleteStudent = async (student) => {
+    if (isDeletingStudent) {
+      return
+    }
+
+    const confirmed = window.confirm(`Are you sure you want to delete ${student.name}?`)
+
+    if (!confirmed) {
+      return
+    }
+
+    setVoterMessage('')
+    setIsDeletingStudent(true)
+
+    try {
+      await deleteDoc(doc(db, 'students', student.id))
+      setVoterMessage('Student deleted successfully.')
+      await loadStudents()
+    } catch (deleteError) {
+      console.error('Failed to delete student:', deleteError)
+      setVoterMessage('Failed to delete student. Check Firebase permissions.')
+    } finally {
+      setIsDeletingStudent(false)
     }
   }
 
@@ -919,12 +961,21 @@ const Admin = () => {
                             </span>
                           </td>
                           <td className="px-4 sm:px-6 py-4 text-sm">
-                            <button
-                              onClick={() => openEditModal(student)}
-                              className="text-indigo-600 hover:text-indigo-800"
-                            >
-                              Edit
-                            </button>
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => openEditModal(student)}
+                                className="text-indigo-600 hover:text-indigo-800 font-semibold"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => handleDeleteStudent(student)}
+                                disabled={isDeletingStudent}
+                                className="text-red-600 hover:text-red-800 font-semibold disabled:opacity-70"
+                              >
+                                Delete
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}

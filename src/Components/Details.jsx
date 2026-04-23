@@ -1,7 +1,8 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
+import { collection, getDocs } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
-import { functions } from '../firebase'
+import { db, functions } from '../firebase'
 import { getBrowserId } from '../utils/browser'
 
 const Details = () => {
@@ -10,6 +11,90 @@ const Details = () => {
   const [studentId, setStudentId] = useState('')
   const [error, setError] = useState('')
   const [isVerifying, setIsVerifying] = useState(false)
+  const [allStudents, setAllStudents] = useState([])
+  const [suggestions, setSuggestions] = useState([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [activeSuggestion, setActiveSuggestion] = useState(-1)
+  const suggestionsRef = useRef(null)
+  const nameInputRef = useRef(null)
+
+  useEffect(() => {
+    const loadStudents = async () => {
+      try {
+        const snapshot = await getDocs(collection(db, 'students'))
+        const rows = snapshot.docs.map((d) => ({
+          name: d.data().name ?? '',
+          studentId: d.data().studentId ?? '',
+        }))
+        setAllStudents(rows)
+      } catch (loadError) {
+        console.error('Failed to preload students:', loadError)
+      }
+    }
+
+    loadStudents()
+  }, [])
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (
+        suggestionsRef.current &&
+        !suggestionsRef.current.contains(e.target) &&
+        nameInputRef.current &&
+        !nameInputRef.current.contains(e.target)
+      ) {
+        setShowSuggestions(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const handleNameChange = (e) => {
+    const value = e.target.value
+    setFullName(value)
+    setActiveSuggestion(-1)
+
+    if (value.trim().length < 2) {
+      setSuggestions([])
+      setShowSuggestions(false)
+      return
+    }
+
+    const query = value.trim().toLowerCase()
+    const matched = allStudents
+      .filter((s) => s.name.toLowerCase().includes(query))
+      .slice(0, 8)
+
+    setSuggestions(matched)
+    setShowSuggestions(matched.length > 0)
+  }
+
+  const handleSelectSuggestion = (suggestion) => {
+    setFullName(suggestion.name)
+    setStudentId(suggestion.studentId)
+    setSuggestions([])
+    setShowSuggestions(false)
+    setActiveSuggestion(-1)
+  }
+
+  const handleNameKeyDown = (e) => {
+    if (!showSuggestions) return
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActiveSuggestion((prev) => Math.min(prev + 1, suggestions.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActiveSuggestion((prev) => Math.max(prev - 1, 0))
+    } else if (e.key === 'Enter' && activeSuggestion >= 0) {
+      e.preventDefault()
+      handleSelectSuggestion(suggestions[activeSuggestion])
+    } else if (e.key === 'Escape') {
+      setShowSuggestions(false)
+    }
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -63,18 +148,45 @@ const Details = () => {
           </p>
 
           <form className="space-y-6" onSubmit={handleSubmit}>
-            <div data-aos="fade-right" data-aos-delay="400">
+            <div data-aos="fade-right" data-aos-delay="400" className="relative">
               <label htmlFor="full-name" className="block text-sm font-semibold text-gray-700 mb-2">
                 Full Name
               </label>
               <input
                 id="full-name"
+                ref={nameInputRef}
                 type="text"
                 placeholder="Enter your full name"
                 value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
+                onChange={handleNameChange}
+                onKeyDown={handleNameKeyDown}
+                onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+                autoComplete="off"
                 className="w-full rounded-3xl border border-gray-300 px-4 py-3 text-gray-900 focus:border-indigo-500 focus:ring-indigo-100 focus:outline-none focus:ring-2"
               />
+              {showSuggestions && (
+                <ul
+                  ref={suggestionsRef}
+                  className="absolute z-50 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-xl overflow-hidden max-h-60 overflow-y-auto"
+                >
+                  {suggestions.map((suggestion, index) => (
+                    <li
+                      key={`${suggestion.name}-${suggestion.studentId}`}
+                      onMouseDown={() => handleSelectSuggestion(suggestion)}
+                      className={`px-4 py-3 cursor-pointer text-sm transition-colors ${
+                        index === activeSuggestion
+                          ? 'bg-indigo-600 text-white'
+                          : 'text-gray-900 hover:bg-indigo-50'
+                      }`}
+                    >
+                      <span className="font-semibold">{suggestion.name}</span>
+                      <span className={`ml-2 text-xs ${index === activeSuggestion ? 'text-indigo-200' : 'text-gray-400'}`}>
+                        {suggestion.studentId}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
 
             <div data-aos="fade-left" data-aos-delay="500">
