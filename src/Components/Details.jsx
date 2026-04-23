@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
+import { collection, doc, getDoc, getDocs } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
-import { functions } from '../firebase'
+import { db, functions } from '../firebase'
 import { getBrowserId } from '../utils/browser'
 
 const Details = () => {
@@ -10,27 +11,44 @@ const Details = () => {
   const [studentId, setStudentId] = useState('')
   const [error, setError] = useState('')
   const [isVerifying, setIsVerifying] = useState(false)
+  const [allStudents, setAllStudents] = useState([])
   const [suggestions, setSuggestions] = useState([])
-  const [isSearchingSuggestions, setIsSearchingSuggestions] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [activeSuggestion, setActiveSuggestion] = useState(-1)
-  const [votingStatus, setVotingStatus] = useState('active')
+  const [votingStatus, setVotingStatus] = useState('loading')
   const suggestionsRef = useRef(null)
   const nameInputRef = useRef(null)
-  const latestSearchRef = useRef(0)
 
   useEffect(() => {
-    const loadVotingStatus = async () => {
+    const loadInitialData = async () => {
       try {
-        const getVotingStatus = httpsCallable(functions, 'getPublicVotingStatus')
-        const response = await getVotingStatus()
-        setVotingStatus(response.data?.status === 'paused' ? 'paused' : 'active')
-      } catch (statusError) {
-        console.error('Failed to load voting status:', statusError)
+        const [votingDoc, studentSnapshot] = await Promise.all([
+          getDoc(doc(db, 'settings', 'voting')),
+          getDocs(collection(db, 'students')),
+        ])
+
+        if (votingDoc.exists()) {
+          setVotingStatus(votingDoc.data()?.status === 'paused' ? 'paused' : 'active')
+        } else {
+          setVotingStatus('active')
+        }
+
+        const rows = studentSnapshot.docs.map((studentDoc) => {
+          const data = studentDoc.data()
+          return {
+            name: data.name ?? '',
+            studentId: data.studentId ?? '',
+          }
+        })
+
+        setAllStudents(rows)
+      } catch (loadError) {
+        console.error('Failed to load details page data:', loadError)
+        setVotingStatus('active')
       }
     }
 
-    loadVotingStatus()
+    loadInitialData()
   }, [])
 
   useEffect(() => {
@@ -49,48 +67,24 @@ const Details = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  useEffect(() => {
-    const query = fullName.trim()
-
-    if (query.length < 2) {
-      setSuggestions([])
-      setShowSuggestions(false)
-      setIsSearchingSuggestions(false)
-      return
-    }
-
-    const timer = setTimeout(async () => {
-      const searchId = latestSearchRef.current + 1
-      latestSearchRef.current = searchId
-      setIsSearchingSuggestions(true)
-
-      try {
-        const searchStudents = httpsCallable(functions, 'searchStudents')
-        const response = await searchStudents({ query })
-
-        if (latestSearchRef.current !== searchId) {
-          return
-        }
-
-        const matched = Array.isArray(response.data?.students) ? response.data.students : []
-        setSuggestions(matched)
-        setShowSuggestions(matched.length > 0)
-      } catch (searchError) {
-        console.error('Failed to search students:', searchError)
-      } finally {
-        if (latestSearchRef.current === searchId) {
-          setIsSearchingSuggestions(false)
-        }
-      }
-    }, 250)
-
-    return () => clearTimeout(timer)
-  }, [fullName])
-
   const handleNameChange = (e) => {
     const value = e.target.value
     setFullName(value)
     setActiveSuggestion(-1)
+
+    if (value.trim().length < 2) {
+      setSuggestions([])
+      setShowSuggestions(false)
+      return
+    }
+
+    const query = value.trim().toLowerCase()
+    const matched = allStudents
+      .filter((student) => student.name.toLowerCase().includes(query))
+      .slice(0, 8)
+
+    setSuggestions(matched)
+    setShowSuggestions(matched.length > 0)
   }
 
   const handleSelectSuggestion = (suggestion) => {
@@ -122,6 +116,11 @@ const Details = () => {
     e.preventDefault()
 
     setError('')
+
+    if (votingStatus === 'loading') {
+      setError('Please wait while we check voting status.')
+      return
+    }
 
     if (votingStatus === 'paused') {
       setError('Polls are closed now. Check back later.')
@@ -165,6 +164,33 @@ const Details = () => {
     }
   }
 
+  if (votingStatus === 'loading') {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center px-4">
+        <div className="rounded-3xl border border-gray-200 bg-gray-50 px-6 py-5 text-sm text-gray-700">
+          Checking voting status...
+        </div>
+      </div>
+    )
+  }
+
+  if (votingStatus === 'paused') {
+    return (
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center px-4">
+        <div className="max-w-md w-full text-center bg-red-50 border border-red-200 rounded-3xl p-10 shadow-lg">
+          <div className="text-5xl mb-4">🔒</div>
+          <h1 className="text-2xl font-bold text-red-800 mb-2">Polls Are Closed</h1>
+          <p className="text-red-700 text-base">Polls are closed now. Check back later.</p>
+        </div>
+        <footer className="mt-16 py-8 border-t border-gray-200 w-full">
+          <div className="text-center">
+            <p className="text-sm text-gray-500">© P-Dan Technologies. All rights reserved</p>
+          </div>
+        </footer>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-white flex flex-col items-center justify-start px-4 pt-24">
       <section className="w-full max-w-3xl mx-auto px-4 py-16" data-aos="fade-up">
@@ -173,12 +199,6 @@ const Details = () => {
           <p className="text-gray-600 mb-8">
             Enter your full name and voter ID to begin the voting process.
           </p>
-
-          {votingStatus === 'paused' && (
-            <p className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              Polls are closed now. Check back later.
-            </p>
-          )}
 
           <form className="space-y-6" onSubmit={handleSubmit}>
             <div data-aos="fade-right" data-aos-delay="400" className="relative">
@@ -220,9 +240,6 @@ const Details = () => {
                   ))}
                 </ul>
               )}
-              {isSearchingSuggestions && (
-                <p className="mt-2 text-xs text-gray-500">Searching names...</p>
-              )}
             </div>
 
             <div data-aos="fade-left" data-aos-delay="500">
@@ -247,7 +264,7 @@ const Details = () => {
 
             <button
               type="submit"
-              disabled={isVerifying || votingStatus === 'paused'}
+              disabled={isVerifying}
               className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-3xl text-lg transition duration-300 shadow-lg"
               data-aos="fade-up" data-aos-delay="600"
             >
