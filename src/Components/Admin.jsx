@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { addDoc, collection, doc, getDocs, limit, query, serverTimestamp, updateDoc, where, writeBatch } from 'firebase/firestore'
+import { addDoc, collection, deleteDoc, doc, getDocs, limit, query, serverTimestamp, updateDoc, where, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
 import { useNavigate } from 'react-router-dom'
@@ -30,6 +30,7 @@ const Admin = () => {
   const [isCandidateModalOpen, setIsCandidateModalOpen] = useState(false)
   const [candidateMessage, setCandidateMessage] = useState('')
   const [isSavingCandidate, setIsSavingCandidate] = useState(false)
+  const [isDeletingCandidate, setIsDeletingCandidate] = useState(false)
   const [candidateName, setCandidateName] = useState('')
   const [candidatePosition, setCandidatePosition] = useState(candidatePositions[0])
   const [candidatePhoto, setCandidatePhoto] = useState(null)
@@ -247,6 +248,33 @@ const Admin = () => {
       setCandidateMessage('Failed to save candidate. Check Firebase Storage and Firestore permissions.')
     } finally {
       setIsSavingCandidate(false)
+    }
+  }
+
+  const handleDeleteCandidate = async () => {
+    if (!editingCandidateId || isDeletingCandidate) {
+      return
+    }
+
+    const confirmed = window.confirm('Are you sure you want to delete this candidate?')
+
+    if (!confirmed) {
+      return
+    }
+
+    setCandidateMessage('')
+    setIsDeletingCandidate(true)
+
+    try {
+      await deleteDoc(doc(db, 'candidates', editingCandidateId))
+      closeCandidateModal()
+      setCandidateMessage('Candidate deleted successfully.')
+      await loadCandidates()
+    } catch (deleteCandidateError) {
+      console.error('Failed to delete candidate:', deleteCandidateError)
+      setCandidateMessage('Failed to delete candidate. Check Firebase permissions.')
+    } finally {
+      setIsDeletingCandidate(false)
     }
   }
 
@@ -725,16 +753,27 @@ const Admin = () => {
                         </div>
 
                         <div className="flex items-center justify-end gap-3 pt-2">
+                          {editingCandidateId && (
+                            <button
+                              type="button"
+                              onClick={handleDeleteCandidate}
+                              disabled={isDeletingCandidate || isSavingCandidate}
+                              className="px-5 py-2 rounded-xl bg-red-600 text-white font-semibold hover:bg-red-700 transition disabled:opacity-70"
+                            >
+                              {isDeletingCandidate ? 'Deleting...' : 'Delete Candidate'}
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={closeCandidateModal}
+                            disabled={isDeletingCandidate || isSavingCandidate}
                             className="px-5 py-2 rounded-xl border border-gray-300 text-gray-700 font-semibold hover:bg-gray-50 transition"
                           >
                             Cancel
                           </button>
                           <button
                             type="submit"
-                            disabled={isSavingCandidate}
+                            disabled={isSavingCandidate || isDeletingCandidate}
                             className="px-5 py-2 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-700 transition disabled:opacity-70"
                           >
                             {isSavingCandidate ? 'Saving...' : editingCandidateId ? 'Save Changes' : 'Save Candidate'}
