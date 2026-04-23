@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
-import { collection, getDocs } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
-import { db, functions } from '../firebase'
+import { functions } from '../firebase'
 import { getBrowserId } from '../utils/browser'
 
 const Details = () => {
@@ -11,28 +10,27 @@ const Details = () => {
   const [studentId, setStudentId] = useState('')
   const [error, setError] = useState('')
   const [isVerifying, setIsVerifying] = useState(false)
-  const [allStudents, setAllStudents] = useState([])
   const [suggestions, setSuggestions] = useState([])
+  const [isSearchingSuggestions, setIsSearchingSuggestions] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [activeSuggestion, setActiveSuggestion] = useState(-1)
+  const [votingStatus, setVotingStatus] = useState('active')
   const suggestionsRef = useRef(null)
   const nameInputRef = useRef(null)
+  const latestSearchRef = useRef(0)
 
   useEffect(() => {
-    const loadStudents = async () => {
+    const loadVotingStatus = async () => {
       try {
-        const snapshot = await getDocs(collection(db, 'students'))
-        const rows = snapshot.docs.map((d) => ({
-          name: d.data().name ?? '',
-          studentId: d.data().studentId ?? '',
-        }))
-        setAllStudents(rows)
-      } catch (loadError) {
-        console.error('Failed to preload students:', loadError)
+        const getVotingStatus = httpsCallable(functions, 'getPublicVotingStatus')
+        const response = await getVotingStatus()
+        setVotingStatus(response.data?.status === 'paused' ? 'paused' : 'active')
+      } catch (statusError) {
+        console.error('Failed to load voting status:', statusError)
       }
     }
 
-    loadStudents()
+    loadVotingStatus()
   }, [])
 
   useEffect(() => {
@@ -51,24 +49,48 @@ const Details = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  useEffect(() => {
+    const query = fullName.trim()
+
+    if (query.length < 2) {
+      setSuggestions([])
+      setShowSuggestions(false)
+      setIsSearchingSuggestions(false)
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      const searchId = latestSearchRef.current + 1
+      latestSearchRef.current = searchId
+      setIsSearchingSuggestions(true)
+
+      try {
+        const searchStudents = httpsCallable(functions, 'searchStudents')
+        const response = await searchStudents({ query })
+
+        if (latestSearchRef.current !== searchId) {
+          return
+        }
+
+        const matched = Array.isArray(response.data?.students) ? response.data.students : []
+        setSuggestions(matched)
+        setShowSuggestions(matched.length > 0)
+      } catch (searchError) {
+        console.error('Failed to search students:', searchError)
+      } finally {
+        if (latestSearchRef.current === searchId) {
+          setIsSearchingSuggestions(false)
+        }
+      }
+    }, 250)
+
+    return () => clearTimeout(timer)
+  }, [fullName])
+
   const handleNameChange = (e) => {
     const value = e.target.value
     setFullName(value)
     setActiveSuggestion(-1)
-
-    if (value.trim().length < 2) {
-      setSuggestions([])
-      setShowSuggestions(false)
-      return
-    }
-
-    const query = value.trim().toLowerCase()
-    const matched = allStudents
-      .filter((s) => s.name.toLowerCase().includes(query))
-      .slice(0, 8)
-
-    setSuggestions(matched)
-    setShowSuggestions(matched.length > 0)
   }
 
   const handleSelectSuggestion = (suggestion) => {
@@ -100,6 +122,11 @@ const Details = () => {
     e.preventDefault()
 
     setError('')
+
+    if (votingStatus === 'paused') {
+      setError('Polls are closed now. Check back later.')
+      return
+    }
 
     const trimmedName = fullName.trim()
     const trimmedId = studentId.trim()
@@ -147,6 +174,12 @@ const Details = () => {
             Enter your full name and voter ID to begin the voting process.
           </p>
 
+          {votingStatus === 'paused' && (
+            <p className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              Polls are closed now. Check back later.
+            </p>
+          )}
+
           <form className="space-y-6" onSubmit={handleSubmit}>
             <div data-aos="fade-right" data-aos-delay="400" className="relative">
               <label htmlFor="full-name" className="block text-sm font-semibold text-gray-700 mb-2">
@@ -187,6 +220,9 @@ const Details = () => {
                   ))}
                 </ul>
               )}
+              {isSearchingSuggestions && (
+                <p className="mt-2 text-xs text-gray-500">Searching names...</p>
+              )}
             </div>
 
             <div data-aos="fade-left" data-aos-delay="500">
@@ -211,7 +247,7 @@ const Details = () => {
 
             <button
               type="submit"
-              disabled={isVerifying}
+              disabled={isVerifying || votingStatus === 'paused'}
               className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-3xl text-lg transition duration-300 shadow-lg"
               data-aos="fade-up" data-aos-delay="600"
             >

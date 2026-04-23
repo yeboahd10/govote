@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { httpsCallable } from 'firebase/functions'
-import { collection, doc, getDoc, getDocs } from 'firebase/firestore'
+import { collection, getDocs } from 'firebase/firestore'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { db, functions } from '../firebase'
 import { candidatePositions } from '../constants/candidates'
@@ -19,7 +19,6 @@ const VotePage = () => {
   const [candidateError, setCandidateError] = useState('')
   const [submitError, setSubmitError] = useState('')
   const [isSubmittingVote, setIsSubmittingVote] = useState(false)
-  const [votingStatus, setVotingStatus] = useState('active')
   const visiblePositions = candidatePositions.filter((position) => (candidatesByPosition[position] ?? []).length > 0)
 
   const handleSelectCandidate = (position, candidateId) => {
@@ -82,21 +81,6 @@ const VotePage = () => {
     loadCandidates()
   }, [])
 
-  useEffect(() => {
-    const loadVotingStatus = async () => {
-      try {
-        const settingsDoc = await getDoc(doc(db, 'settings', 'voting'))
-        if (settingsDoc.exists()) {
-          setVotingStatus(settingsDoc.data().status ?? 'active')
-        }
-      } catch (statusError) {
-        console.error('Failed to load voting status:', statusError)
-      }
-    }
-
-    loadVotingStatus()
-  }, [])
-
   const handleSubmitVote = async () => {
     setSubmitError('')
 
@@ -139,23 +123,6 @@ const VotePage = () => {
     } finally {
       setIsSubmittingVote(false)
     }
-  }
-
-  if (votingStatus === 'paused') {
-    return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center px-4">
-        <div className="max-w-md w-full text-center bg-red-50 border border-red-200 rounded-3xl p-10 shadow-lg">
-          <div className="text-5xl mb-4">🔒</div>
-          <h1 className="text-2xl font-bold text-red-800 mb-2">Polls Are Closed</h1>
-          <p className="text-red-700 text-base">Voting is temporarily paused. Check back later.</p>
-        </div>
-        <footer className="mt-16 py-8 border-t border-gray-200 w-full">
-          <div className="text-center">
-            <p className="text-sm text-gray-500">© P-Dan Technologies. All rights reserved</p>
-          </div>
-        </footer>
-      </div>
-    )
   }
 
   return (

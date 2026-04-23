@@ -73,10 +73,47 @@ const ensureAdmin = async (uid) => {
   }
 };
 
+const getVotingStatus = async () => {
+  const votingSettingsSnapshot = await db.collection('settings').doc('voting').get();
+  if (!votingSettingsSnapshot.exists) {
+    return 'active';
+  }
+
+  return votingSettingsSnapshot.data()?.status === 'paused' ? 'paused' : 'active';
+};
+
+export const getPublicVotingStatus = onCall(async () => ({
+  status: await getVotingStatus(),
+}));
+
+export const searchStudents = onCall(async (request) => {
+  const query = normalizeSpaces(request.data?.query || '').toLowerCase();
+
+  if (query.length < 2) {
+    return { students: [] };
+  }
+
+  const snapshot = await db.collection('students').limit(2000).get();
+  const matches = snapshot.docs
+    .map((studentDoc) => studentDoc.data())
+    .filter((student) => String(student.name || '').toLowerCase().includes(query))
+    .slice(0, 8)
+    .map((student) => ({
+      name: student.name || '',
+      studentId: student.studentId || '',
+    }));
+
+  return { students: matches };
+});
+
 export const verifyStudent = onCall(async (request) => {
   const fullName = normalizeSpaces(request.data?.fullName);
   const studentId = normalizeStudentId(request.data?.studentId);
   const browserId = normalizeBrowserId(request.data?.browserId);
+
+  if (await getVotingStatus() === 'paused') {
+    throw new HttpsError('failed-precondition', 'Polls are closed now. Check back later.');
+  }
 
   if (!fullName || !studentId) {
     throw new HttpsError('invalid-argument', 'Please enter both full name and student ID.');
@@ -135,6 +172,10 @@ export const submitVote = onCall(async (request) => {
 
   if (!fullName || !studentId || !browserId || typeof selections !== 'object') {
     throw new HttpsError('invalid-argument', 'A valid student identity and selections are required.');
+  }
+
+  if (await getVotingStatus() === 'paused') {
+    throw new HttpsError('failed-precondition', 'Polls are closed now. Check back later.');
   }
 
   const browserLockRef = db.collection('browserVoteLocks').doc(buildBrowserLockId(browserId));
