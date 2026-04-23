@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { addDoc, collection, deleteDoc, doc, getDocs, limit, query, serverTimestamp, updateDoc, where, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 import { useNavigate } from 'react-router-dom'
 import { auth, db, functions, storage } from '../firebase'
 import { candidatePositions } from '../constants/candidates'
@@ -36,6 +38,7 @@ const Admin = () => {
   const [candidatePhoto, setCandidatePhoto] = useState(null)
   const [editingCandidateId, setEditingCandidateId] = useState('')
   const [editingCandidateImageUrl, setEditingCandidateImageUrl] = useState('')
+  const [isExportingVoters, setIsExportingVoters] = useState(false)
   const [voterPage, setVoterPage] = useState(1)
   const [results, setResults] = useState({})
   const [votes, setVotes] = useState([])
@@ -76,9 +79,11 @@ const Admin = () => {
       studentRows.sort((a, b) => a.name.localeCompare(b.name))
       setStudents(studentRows)
       setVoterPage(1)
+      return studentRows
     } catch (studentsError) {
       console.error('Failed to load students:', studentsError)
       setVoterMessage('Could not load students from Firestore.')
+      return []
     } finally {
       setIsLoadingStudents(false)
     }
@@ -251,12 +256,12 @@ const Admin = () => {
     }
   }
 
-  const handleDeleteCandidate = async () => {
-    if (!editingCandidateId || isDeletingCandidate) {
+  const deleteCandidateById = async (candidateId, candidateName = 'this candidate', shouldCloseModal = false) => {
+    if (!candidateId || isDeletingCandidate) {
       return
     }
 
-    const confirmed = window.confirm('Are you sure you want to delete this candidate?')
+    const confirmed = window.confirm(`Are you sure you want to delete ${candidateName}?`)
 
     if (!confirmed) {
       return
@@ -266,8 +271,10 @@ const Admin = () => {
     setIsDeletingCandidate(true)
 
     try {
-      await deleteDoc(doc(db, 'candidates', editingCandidateId))
-      closeCandidateModal()
+      await deleteDoc(doc(db, 'candidates', candidateId))
+      if (shouldCloseModal) {
+        closeCandidateModal()
+      }
       setCandidateMessage('Candidate deleted successfully.')
       await loadCandidates()
     } catch (deleteCandidateError) {
@@ -275,6 +282,59 @@ const Admin = () => {
       setCandidateMessage('Failed to delete candidate. Check Firebase permissions.')
     } finally {
       setIsDeletingCandidate(false)
+    }
+  }
+
+  const handleDeleteCandidate = async () => {
+    await deleteCandidateById(editingCandidateId, 'this candidate', true)
+  }
+
+  const handleExportVoterList = async () => {
+    if (isExportingVoters) {
+      return
+    }
+
+    setVoterMessage('')
+    setIsExportingVoters(true)
+
+    try {
+      const studentsToExport = students.length > 0 ? students : await loadStudents()
+
+      if (!studentsToExport || studentsToExport.length === 0) {
+        setVoterMessage('No voters to export yet.')
+        return
+      }
+
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
+      const createdAt = new Date().toLocaleString()
+
+      pdf.setFontSize(16)
+      pdf.text('GoVote Voter List', 40, 40)
+      pdf.setFontSize(10)
+      pdf.text(`Generated: ${createdAt}`, 40, 58)
+
+      autoTable(pdf, {
+        startY: 76,
+        head: [['Name', 'Student ID']],
+        body: studentsToExport.map((student) => [student.name, student.studentId]),
+        styles: {
+          fontSize: 10,
+          cellPadding: 6,
+        },
+        headStyles: {
+          fillColor: [79, 70, 229],
+          textColor: 255,
+          fontStyle: 'bold',
+        },
+      })
+
+      pdf.save(`govote-voters-${new Date().toISOString().slice(0, 10)}.pdf`)
+      setVoterMessage('Voter list exported to PDF successfully.')
+    } catch (exportError) {
+      console.error('Failed to export voter list:', exportError)
+      setVoterMessage('Failed to export voter list. Please try again.')
+    } finally {
+      setIsExportingVoters(false)
     }
   }
 
@@ -679,12 +739,21 @@ const Admin = () => {
                           <p className="text-sm text-gray-600">{candidate.position}</p>
                         </div>
                       </div>
-                      <button
-                        onClick={() => openEditCandidateModal(candidate)}
-                        className="text-sm font-semibold text-indigo-600 hover:text-indigo-800"
-                      >
-                        Edit
-                      </button>
+                      <div className="flex items-center gap-4">
+                        <button
+                          onClick={() => openEditCandidateModal(candidate)}
+                          className="text-sm font-semibold text-indigo-600 hover:text-indigo-800"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => deleteCandidateById(candidate.id, candidate.name)}
+                          disabled={isDeletingCandidate}
+                          className="text-sm font-semibold text-red-600 hover:text-red-800 disabled:opacity-70"
+                        >
+                          {isDeletingCandidate ? 'Deleting...' : 'Delete'}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -800,8 +869,12 @@ const Admin = () => {
                     >
                       Add Student
                     </button>
-                    <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl text-sm sm:text-base font-semibold transition">
-                      Export Voter List
+                    <button
+                      onClick={handleExportVoterList}
+                      disabled={isExportingVoters || isLoadingStudents}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl text-sm sm:text-base font-semibold transition disabled:opacity-70"
+                    >
+                      {isExportingVoters ? 'Exporting PDF...' : 'Export Voter List'}
                     </button>
                   </div>
                 </div>
