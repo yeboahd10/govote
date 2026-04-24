@@ -82,6 +82,7 @@ const Admin = () => {
           id: studentDoc.id,
           name: data.name ?? '',
           studentId: data.studentId ?? '',
+          hasVoted: data.hasVoted ?? false,
           status: data.status ?? 'Not Voted',
         }
       })
@@ -999,7 +1000,7 @@ const Admin = () => {
                                 ? 'bg-green-100 text-green-800'
                                 : 'bg-amber-100 text-amber-800'
                             }`}>
-                              {student.hasVoted ? 'Voted' : (student.status || 'Pending')}
+                              {student.hasVoted ? 'Voted' : 'Not Voted'}
                             </span>
                           </td>
                           <td className="px-4 sm:px-6 py-4 text-sm">
