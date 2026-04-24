@@ -73,6 +73,64 @@ export const getPublicVotingStatus = onCall(async () => ({
   status: await getVotingStatus(),
 }));
 
+export const getPublicResults = onCall(async () => {
+  const [candidatesSnapshot, votesSnapshot] = await Promise.all([
+    db.collection('candidates').get(),
+    db.collection('votes').get(),
+  ]);
+
+  const results = new Map();
+
+  candidatesSnapshot.docs.forEach((candidateDoc) => {
+    const candidate = candidateDoc.data();
+    const position = candidate.position;
+
+    if (!position) {
+      return;
+    }
+
+    if (!results.has(position)) {
+      results.set(position, []);
+    }
+
+    results.get(position).push({
+      id: candidateDoc.id,
+      name: candidate.name || 'Unnamed Candidate',
+      imageUrl: candidate.imageUrl || '',
+      votes: 0,
+    });
+  });
+
+  votesSnapshot.docs.forEach((voteDoc) => {
+    const vote = voteDoc.data();
+
+    Object.entries(vote.selections || {}).forEach(([position, candidateId]) => {
+      const positionEntries = results.get(position) || [];
+      const candidateEntry = positionEntries.find((entry) => entry.id === candidateId);
+
+      if (candidateEntry) {
+        candidateEntry.votes += 1;
+      }
+    });
+  });
+
+  const normalizedResults = {};
+
+  results.forEach((entries, position) => {
+    normalizedResults[position] = [...entries].sort((first, second) => {
+      if (second.votes !== first.votes) {
+        return second.votes - first.votes;
+      }
+
+      return first.name.localeCompare(second.name);
+    });
+  });
+
+  return {
+    results: normalizedResults,
+  };
+});
+
 export const searchStudents = onCall(async (request) => {
   const query = normalizeSpaces(request.data?.query || '').toLowerCase();
 

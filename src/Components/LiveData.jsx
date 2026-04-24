@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { collection, getDocs } from 'firebase/firestore'
-import { db } from '../firebase'
-import { buildResultsByPosition, createEmptyResults } from '../utils/voting'
+import { httpsCallable } from 'firebase/functions'
+import { functions } from '../firebase'
+import { createEmptyResults } from '../utils/voting'
 
 const LiveData = () => {
   const [results, setResults] = useState(createEmptyResults())
@@ -14,21 +14,12 @@ const LiveData = () => {
       setResultsError('')
 
       try {
-        const [candidatesSnapshot, votesSnapshot] = await Promise.all([
-          getDocs(collection(db, 'candidates')),
-          getDocs(collection(db, 'votes')),
-        ])
-
-        const candidates = candidatesSnapshot.docs.map((candidateDoc) => ({
-          id: candidateDoc.id,
-          ...candidateDoc.data(),
-        }))
-        const votes = votesSnapshot.docs.map((voteDoc) => voteDoc.data())
-
-        setResults(buildResultsByPosition(candidates, votes))
+        const getPublicResults = httpsCallable(functions, 'getPublicResults')
+        const response = await getPublicResults()
+        setResults(response.data?.results ?? createEmptyResults())
       } catch (loadError) {
         console.error('Failed to load live results:', loadError)
-        setResultsError('Could not load live results right now.')
+        setResultsError('Could not load live results right now. If this keeps happening, deploy the latest Cloud Functions updates.')
       } finally {
         setIsLoadingResults(false)
       }
