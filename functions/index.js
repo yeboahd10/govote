@@ -416,3 +416,208 @@ export const resetVoting = onCall(async (request) => {
   await Promise.all(commits);
   return { success: true };
 });
+
+export const resetStudentVote = onCall(async (request) => {
+  await ensureAdmin(request.auth?.uid);
+
+  const studentId = normalizeStudentId(request.data?.studentId);
+  if (!studentId) {
+    throw new HttpsError('invalid-argument', 'Student ID is required.');
+  }
+
+  // Find the student
+  const studentSnapshot = await db
+    .collection('students')
+    .where('studentIdNormalized', '==', studentId)
+    .limit(1)
+    .get();
+
+  if (studentSnapshot.empty) {
+    throw new HttpsError('not-found', 'Student not found.');
+  }
+
+  const studentDoc = studentSnapshot.docs[0];
+  const student = studentDoc.data();
+
+  if (!student.hasVoted) {
+    throw new HttpsError('failed-precondition', 'This student has not voted yet.');
+  }
+
+  // Find and delete the vote record
+  const voteSnapshot = await db.collection('votes').doc(studentDoc.id).get();
+  if (voteSnapshot.exists) {
+    const voteData = voteSnapshot.data();
+    // Find browserVoteLock and deviceVoteLock using the data from the vote
+    const browserLockId = buildBrowserLockId(voteData.browserIdNormalized);
+    const deviceLockId = buildDeviceLockId(voteData.deviceFingerprint);
+
+    // Use transaction to ensure consistency
+    await db.runTransaction(async (transaction) => {
+      transaction.delete(voteSnapshot.ref);
+      transaction.delete(db.collection('browserVoteLocks').doc(browserLockId));
+      transaction.delete(db.collection('deviceVoteLocks').doc(deviceLockId));
+      transaction.update(studentDoc.ref, {
+        hasVoted: false,
+        status: 'Not Voted',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+  } else {
+    // Vote record doesn't exist, just reset student status
+    await studentDoc.ref.update({
+      hasVoted: false,
+      status: 'Not Voted',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+
+  return { success: true };
+});
+
+export const repairStudentData = onCall(async (request) => {
+  await ensureAdmin(request.auth?.uid);
+
+  const studentsSnapshot = await db.collection('students').get();
+  let repaired = 0;
+  const issues = [];
+
+  let batch = db.batch();
+  let operations = 0;
+  const commits = [];
+
+  const queueOperation = () => {
+    operations += 1;
+    if (operations === 450) {
+      commits.push(batch.commit());
+      batch = db.batch();
+      operations = 0;
+    }
+  };
+
+  // Check each student
+  for (const studentDoc of studentsSnapshot.docs) {
+    const data = studentDoc.data();
+
+    // Fix 1: Missing hasVoted field
+    if (data.hasVoted === undefined || data.hasVoted === null) {
+      batch.update(studentDoc.ref, {
+        hasVoted: false,
+        status: data.status || 'Not Voted',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      issues.push(`${data.name} (${data.studentId}): hasVoted was missing, set to false`);
+      repaired++;
+      queueOperation();
+      continue;
+    }
+
+    // Fix 2: hasVoted=true but no corresponding vote exists
+    if (data.hasVoted === true) {
+      const voteExists = await db.collection('votes').doc(studentDoc.id).get();
+      if (!voteExists.exists) {
+        batch.update(studentDoc.ref, {
+          hasVoted: false,
+          status: 'Not Voted',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        issues.push(`${data.name} (${data.studentId}): hasVoted was true but no vote found, reset to false`);
+        repaired++;
+        queueOperation();
+        continue;
+      }
+    }
+
+    // Fix 3: hasVoted=false but vote exists (shouldn't happen, but check anyway)
+    if (data.hasVoted === false) {
+      const voteExists = await db.collection('votes').doc(studentDoc.id).get();
+      if (voteExists.exists) {
+        batch.update(studentDoc.ref, {
+          hasVoted: true,
+          status: 'Voted',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        issues.push(`${data.name} (${data.studentId}): hasVoted was false but vote exists, set to true`);
+        repaired++;
+        queueOperation();
+      }
+    }
+  }
+
+  if (operations > 0) {
+    commits.push(batch.commit());
+  }
+
+  await Promise.all(commits);
+
+  return {
+    success: true,
+    repaired,
+    issues: issues.slice(0, 50), // Return first 50 issues for display
+    totalIssues: issues.length,
+  };
+});
+export const clearStudentVoteLocks = onCall(async (request) => {
+  await ensureAdmin(request.auth?.uid);
+
+  const studentId = normalizeStudentId(request.data?.studentId);
+  if (!studentId) {
+    throw new HttpsError('invalid-argument', 'Student ID is required.');
+  }
+
+  // Find the student
+  const studentSnapshot = await db
+    .collection('students')
+    .where('studentIdNormalized', '==', studentId)
+    .limit(1)
+    .get();
+
+  if (studentSnapshot.empty) {
+    throw new HttpsError('not-found', 'Student not found.');
+  }
+
+  const student = studentSnapshot.docs[0].data();
+
+  // Find all vote locks for this student by querying on studentId field
+  const [browserLocksSnapshot, deviceLocksSnapshot] = await Promise.all([
+    db.collection('browserVoteLocks').where('studentId', '==', student.studentId).get(),
+    db.collection('deviceVoteLocks').where('studentId', '==', student.studentId).get(),
+  ]);
+
+  let batch = db.batch();
+  let operations = 0;
+  const commits = [];
+
+  const queueOperation = () => {
+    operations += 1;
+    if (operations === 450) {
+      commits.push(batch.commit());
+      batch = db.batch();
+      operations = 0;
+    }
+  };
+
+  let locksCleared = 0;
+
+  for (const lockDoc of browserLocksSnapshot.docs) {
+    batch.delete(lockDoc.ref);
+    locksCleared++;
+    queueOperation();
+  }
+
+  for (const lockDoc of deviceLocksSnapshot.docs) {
+    batch.delete(lockDoc.ref);
+    locksCleared++;
+    queueOperation();
+  }
+
+  if (operations > 0) {
+    commits.push(batch.commit());
+  }
+
+  await Promise.all(commits);
+
+  return {
+    success: true,
+    locksCleared,
+  };
+});

@@ -45,13 +45,19 @@ const Admin = () => {
   const [resultsMessage, setResultsMessage] = useState('')
   const [isResettingVotes, setIsResettingVotes] = useState(false)
   const [isDeletingStudent, setIsDeletingStudent] = useState(false)
+  const [isResettingStudentVote, setIsResettingStudentVote] = useState(false)
+  const [voterSearch, setVoterSearch] = useState('')
+  const [isRepairing, setIsRepairing] = useState(false)
   const [securityLogs, setSecurityLogs] = useState([])
   const [isLoadingSecurityLogs, setIsLoadingSecurityLogs] = useState(false)
   const [securityMessage, setSecurityMessage] = useState('')
 
   const votersPerPage = 10
-  const totalVoterPages = Math.max(1, Math.ceil(students.length / votersPerPage))
-  const paginatedStudents = students.slice((voterPage - 1) * votersPerPage, voterPage * votersPerPage)
+  const filteredStudents = voterSearch.trim()
+    ? students.filter((s) => s.name.toLowerCase().includes(voterSearch.trim().toLowerCase()))
+    : students
+  const totalVoterPages = Math.max(1, Math.ceil(filteredStudents.length / votersPerPage))
+  const paginatedStudents = filteredStudents.slice((voterPage - 1) * votersPerPage, voterPage * votersPerPage)
 
   const stats = {
     totalVotes: getTotalVotesForResults(results, votes),
@@ -525,6 +531,68 @@ const Admin = () => {
     }
   }
 
+  const handleResetStudentVote = async (student) => {
+    if (isResettingStudentVote) {
+      return
+    }
+
+    const statusText = student.hasVoted ? 'reset vote' : 'clear vote locks'
+    const confirmed = window.confirm(`Are you sure you want to ${statusText} for ${student.name}? They will be able to vote again.`)
+
+    if (!confirmed) {
+      return
+    }
+
+    setVoterMessage('')
+    setIsResettingStudentVote(true)
+
+    try {
+      if (student.hasVoted) {
+        // Student has voted: call resetStudentVote to clear vote and locks
+        const resetStudentVote = httpsCallable(functions, 'resetStudentVote')
+        await resetStudentVote({ studentId: student.studentId })
+        setVoterMessage(`Vote reset for ${student.name}. They can vote again now.`)
+      } else {
+        // Student hasn't voted: call clearStudentVoteLocks to just clear locks
+        const clearStudentVoteLocks = httpsCallable(functions, 'clearStudentVoteLocks')
+        const result = await clearStudentVoteLocks({ studentId: student.studentId })
+        setVoterMessage(`Cleared ${result.data.locksCleared} vote lock(s) for ${student.name}. They can now vote.`)
+      }
+      await loadStudents()
+    } catch (resetError) {
+      console.error('Failed to reset:', resetError)
+      setVoterMessage(`Failed to reset: ${resetError.message}`)
+    } finally {
+      setIsResettingStudentVote(false)
+    }
+
+  }
+
+  const handleRepairStudentData = async () => {
+    if (isRepairing) return
+    const confirmed = window.confirm('This will check all students and fix any inconsistencies with voting status. Continue?')
+    if (!confirmed) return
+
+    setResultsMessage('')
+    setIsRepairing(true)
+
+    try {
+      const repairStudentData = httpsCallable(functions, 'repairStudentData')
+      const result = await repairStudentData({})
+      const message = `✅ Repaired ${result.data.repaired} student(s).${result.data.totalIssues > 50 ? ` (${result.data.totalIssues} total issues found)` : ''}`
+      setResultsMessage(message)
+      if (result.data.issues.length > 0) {
+        console.log('Issues fixed:', result.data.issues)
+      }
+      await loadStudents()
+    } catch (repairError) {
+      console.error('Repair failed:', repairError)
+      setResultsMessage(`Repair failed: ${repairError.message}`)
+    } finally {
+      setIsRepairing(false)
+    }
+  }
+
   const handleResetVoting = async () => {
     setResultsMessage('')
     setVoterMessage('')
@@ -735,7 +803,25 @@ const Admin = () => {
                 </div>
               </div>
 
-            
+              <div className="mt-8 pt-6 border-t border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">System Maintenance</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <button
+                    onClick={handleResetVoting}
+                    disabled={isResettingVotes}
+                    className="bg-red-600 hover:bg-red-700 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl text-sm sm:text-base font-semibold transition disabled:opacity-70"
+                  >
+                    {isResettingVotes ? 'Resetting...' : 'Reset All Voting Data'}
+                  </button>
+                  <button
+                    onClick={handleRepairStudentData}
+                    disabled={isRepairing}
+                    className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl text-sm sm:text-base font-semibold transition disabled:opacity-70"
+                  >
+                    {isRepairing ? 'Repairing...' : 'Repair Student Data'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -942,7 +1028,11 @@ const Admin = () => {
               <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">Voter Management</h2>
               <div className="space-y-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-sm sm:text-base text-gray-600">Total registered voters: {students.length}</p>
+                  <p className="text-sm sm:text-base text-gray-600">
+                    {voterSearch.trim()
+                      ? `${filteredStudents.length} result${filteredStudents.length !== 1 ? 's' : ''} of ${students.length} voters`
+                      : `Total registered voters: ${students.length}`}
+                  </p>
                   <div className="flex flex-wrap gap-2 sm:gap-3">
                     <button
                       onClick={() => setIsAddModalOpen(true)}
@@ -958,6 +1048,25 @@ const Admin = () => {
                       {isExportingVoters ? 'Exporting PDF...' : 'Export Voter List'}
                     </button>
                   </div>
+                </div>
+
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-3 flex items-center text-gray-400 pointer-events-none">🔍</span>
+                  <input
+                    type="text"
+                    value={voterSearch}
+                    onChange={(e) => { setVoterSearch(e.target.value); setVoterPage(1); }}
+                    placeholder="Search by name..."
+                    className="w-full pl-9 pr-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  {voterSearch && (
+                    <button
+                      onClick={() => { setVoterSearch(''); setVoterPage(1); }}
+                      className="absolute inset-y-0 right-3 flex items-center text-gray-400 hover:text-gray-600 text-lg leading-none"
+                    >
+                      ×
+                    </button>
+                  )}
                 </div>
 
                 {voterMessage && (
@@ -1012,6 +1121,13 @@ const Admin = () => {
                                 Edit
                               </button>
                               <button
+                                onClick={() => handleResetStudentVote(student)}
+                                disabled={isResettingStudentVote}
+                                className="text-blue-600 hover:text-blue-800 font-semibold disabled:opacity-70"
+                              >
+                                Reset
+                              </button>
+                              <button
                                 onClick={() => handleDeleteStudent(student)}
                                 disabled={isDeletingStudent}
                                 className="text-red-600 hover:text-red-800 font-semibold disabled:opacity-70"
@@ -1027,10 +1143,10 @@ const Admin = () => {
                   </div>
                 </div>
 
-                {!isLoadingStudents && students.length > 0 && (
+                {!isLoadingStudents && filteredStudents.length > 0 && (
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <p className="text-sm text-gray-600">
-                      Showing {(voterPage - 1) * votersPerPage + 1} to {Math.min(voterPage * votersPerPage, students.length)} of {students.length} voters
+                      Showing {(voterPage - 1) * votersPerPage + 1} to {Math.min(voterPage * votersPerPage, filteredStudents.length)} of {filteredStudents.length} voters
                     </p>
                     <div className="flex items-center gap-2">
                       <button
@@ -1267,3 +1383,6 @@ const Admin = () => {
 }
 
 export default Admin
+
+
+
