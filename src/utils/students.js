@@ -7,9 +7,10 @@ export const normalizeName = (name) => {
   const normalized = normalizeSpaces(removeInvisibleChars(name)).toLowerCase();
   // Split name into words, sort them alphabetically, and rejoin
   // This makes "John Doe" equal to "Doe John"
+  // Use locale-independent sort to match server-side behaviour exactly
   return normalized
     .split(/\s+/)
-    .sort()
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
     .join(' ');
 };
 

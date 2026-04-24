@@ -31,11 +31,17 @@ const normalizeName = (name) => {
   const normalized = normalizeSpaces(name).toLowerCase();
   // Split name into words, sort them alphabetically, and rejoin
   // This makes "John Doe" equal to "Doe John"
+  // Use locale-independent sort to match client-side behaviour exactly
   return normalized
     .split(/\s+/)
-    .sort()
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
     .join(' ');
 };
+
+// Simple normalization without word-sorting — used as a fallback comparison
+// and for healing legacy records whose nameNormalized was stored without sorting
+const normalizeNameSimple = (name) =>
+  normalizeSpaces(name).toLowerCase();
 
 const normalizeStudentId = (studentId) =>
   normalizeSpaces(studentId)
@@ -173,8 +179,29 @@ export const verifyStudent = onCall(async (request) => {
   const studentDoc = snapshot.docs[0];
   const student = studentDoc.data();
 
-  if (student.nameNormalized !== normalizeName(fullName)) {
+  const submittedSorted   = normalizeName(fullName);
+  const submittedSimple   = normalizeNameSimple(fullName);
+  const storedNormalized  = student.nameNormalized || '';
+  const storedSimple      = normalizeNameSimple(student.name || '');
+
+  const primaryMatch  = submittedSorted  === storedNormalized;
+  const fallbackMatch = submittedSimple  === storedSimple;
+
+  if (!primaryMatch && !fallbackMatch) {
     throw new HttpsError('failed-precondition', 'Name does not match this student ID.');
+  }
+
+  // Heal stale nameNormalized in Firestore so future verifications use the fast path
+  if (!primaryMatch && fallbackMatch) {
+    try {
+      await studentDoc.ref.update({
+        nameNormalized: submittedSorted,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (healError) {
+      // Non-fatal — verification still proceeds
+      console.warn('Could not heal nameNormalized for student:', healError);
+    }
   }
 
   if (student.hasVoted) {

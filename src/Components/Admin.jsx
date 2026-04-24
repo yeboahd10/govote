@@ -688,6 +688,7 @@ const Admin = () => {
               { id: 'results', label: 'Results', icon: '📈' },
               { id: 'candidates', label: 'Candidates', icon: '👥' },
               { id: 'voters', label: 'Voters', icon: '🗳️' },
+              { id: 'security', label: 'Security Logs', icon: '🛡️' },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -989,12 +990,16 @@ const Admin = () => {
                       )}
 
                       {!isLoadingStudents && paginatedStudents.map((student) => (
-                        <tr key={student.id}>
-                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900">{student.name}</td>
-                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900">{student.studentId}</td>
+                        <tr key={student.id} className={student.hasVoted ? 'bg-green-50' : ''}>
+                          <td className={`px-4 sm:px-6 py-4 text-sm font-medium ${student.hasVoted ? 'text-green-800' : 'text-gray-900'}`}>{student.name}</td>
+                          <td className={`px-4 sm:px-6 py-4 text-sm ${student.hasVoted ? 'text-green-700' : 'text-gray-900'}`}>{student.studentId}</td>
                           <td className="px-4 sm:px-6 py-4 text-sm">
-                            <span className="px-2 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 whitespace-nowrap">
-                              {student.status}
+                            <span className={`px-2 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${
+                              student.hasVoted
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {student.hasVoted ? 'Voted' : (student.status || 'Pending')}
                             </span>
                           </td>
                           <td className="px-4 sm:px-6 py-4 text-sm">
