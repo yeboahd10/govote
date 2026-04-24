@@ -44,7 +44,10 @@ const Home = () => {
           >
             Begin Voting
           </button>
-          <button className="bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold py-4 px-8 rounded-3xl text-lg transition duration-300 shadow-sm">
+          <button
+            onClick={() => navigate('/live-feed')}
+            className="bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold py-4 px-8 rounded-3xl text-lg transition duration-300 shadow-sm"
+          >
             Track Polls
           </button>
         </div>
