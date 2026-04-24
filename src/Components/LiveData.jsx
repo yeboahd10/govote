@@ -66,7 +66,7 @@ const LiveData = () => {
     <div className="min-h-screen bg-linear-to-br from-gray-50 to-gray-100 px-3 py-8 pt-20 sm:px-4 sm:py-12 sm:pt-24">
       <div className="mx-auto max-w-6xl">
         <div className="mb-8 text-center sm:mb-12">
-          <div className="mt-3 mb-2 flex items-center justify-center gap-2 sm:mt-5 sm:mb-3 sm:gap-3">
+          <div className="mt-6 mb-2 flex items-center justify-center gap-2 sm:mt-5 sm:mb-3 sm:gap-3">
             <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
             <span className="text-sm font-semibold text-green-600">LIVE</span>
           </div>
@@ -167,9 +167,7 @@ const LiveData = () => {
         </div>
         )}
 
-        <div className="mt-8 text-center text-sm text-gray-600 sm:mt-12">
-          <p>Results reflect saved votes in Firestore.</p>
-        </div>
+       
       </div>
 
       {/* Footer */}
