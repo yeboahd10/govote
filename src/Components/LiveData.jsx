@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { collection, getDocs } from 'firebase/firestore'
-import { auth, db } from '../firebase'
-import { useNavigate } from 'react-router-dom'
-import { isUserAdmin } from '../utils/adminAuth'
+import { db } from '../firebase'
 import { buildResultsByPosition, createEmptyResults } from '../utils/voting'
 
 const LiveData = () => {
-  const navigate = useNavigate()
   const [results, setResults] = useState(createEmptyResults())
   const [isLoadingResults, setIsLoadingResults] = useState(true)
   const [resultsError, setResultsError] = useState('')
@@ -17,14 +14,6 @@ const LiveData = () => {
       setResultsError('')
 
       try {
-        await auth.authStateReady()
-        const adminAllowed = await isUserAdmin(auth.currentUser)
-
-        if (!adminAllowed) {
-          navigate('/admin')
-          return
-        }
-
         const [candidatesSnapshot, votesSnapshot] = await Promise.all([
           getDocs(collection(db, 'candidates')),
           getDocs(collection(db, 'votes')),
@@ -46,7 +35,7 @@ const LiveData = () => {
     }
 
     loadResults()
-  }, [navigate])
+  }, [])
 
   const getTotalVotes = (candidates) => {
     return candidates.reduce((sum, candidate) => sum + candidate.votes, 0)
