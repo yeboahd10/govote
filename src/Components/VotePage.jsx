@@ -4,7 +4,6 @@ import { collection, getDocs } from 'firebase/firestore'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { db, functions } from '../firebase'
 import { candidatePositions } from '../constants/candidates'
-import { getBrowserId, getDeviceFingerprint } from '../utils/browser'
 
 const VotePage = () => {
   const navigate = useNavigate()
@@ -107,12 +106,9 @@ const VotePage = () => {
 
     try {
       const submitVote = httpsCallable(functions, 'submitVote')
-      const deviceFingerprint = await getDeviceFingerprint()
       await submitVote({
         fullName: student.name,
         studentId: student.studentId,
-        browserId: getBrowserId(),
-        deviceFingerprint,
         selections: requiredPositions.reduce((accumulator, position) => ({
           ...accumulator,
           [position]: selectedCandidates[position],

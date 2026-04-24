@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore'
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, limit, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
 import jsPDF from 'jspdf'
@@ -48,9 +48,6 @@ const Admin = () => {
   const [isResettingStudentVote, setIsResettingStudentVote] = useState(false)
   const [voterSearch, setVoterSearch] = useState('')
   const [isRepairing, setIsRepairing] = useState(false)
-  const [securityLogs, setSecurityLogs] = useState([])
-  const [isLoadingSecurityLogs, setIsLoadingSecurityLogs] = useState(false)
-  const [securityMessage, setSecurityMessage] = useState('')
 
   const votersPerPage = 10
   const filteredStudents = voterSearch.trim()
@@ -159,37 +156,6 @@ const Admin = () => {
     }
   }, [loadCandidates])
 
-  const loadSecurityLogs = useCallback(async () => {
-    setIsLoadingSecurityLogs(true)
-    setSecurityMessage('')
-
-    try {
-      const logsQuery = query(collection(db, 'securityLogs'), orderBy('createdAt', 'desc'), limit(100))
-      const logsSnapshot = await getDocs(logsQuery)
-      const logRows = logsSnapshot.docs.map((logDoc) => {
-        const data = logDoc.data()
-        return {
-          id: logDoc.id,
-          event: data.event ?? 'unknown',
-          studentId: data.studentId ?? '-',
-          ipAddress: data.ipAddress ?? '-',
-          ipHash: data.ipHash ?? '-',
-          userAgent: data.userAgent ?? '-',
-          browserIdNormalized: data.browserIdNormalized ?? '-',
-          deviceFingerprint: data.deviceFingerprint ?? '-',
-          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : null,
-        }
-      })
-
-      setSecurityLogs(logRows)
-    } catch (logsError) {
-      console.error('Failed to load security logs:', logsError)
-      setSecurityMessage('Could not load security logs from Firestore.')
-    } finally {
-      setIsLoadingSecurityLogs(false)
-    }
-  }, [])
-
   useEffect(() => {
     const loadInitialData = async () => {
       await auth.authStateReady()
@@ -228,10 +194,7 @@ const Admin = () => {
     if (activeTab === 'results') {
       loadResults()
     }
-    if (activeTab === 'security') {
-      loadSecurityLogs()
-    }
-  }, [activeTab, loadCandidates, loadResults, loadSecurityLogs, loadStudents])
+  }, [activeTab, loadCandidates, loadResults, loadStudents])
 
   const closeCandidateModal = () => {
     setIsCandidateModalOpen(false)
@@ -547,17 +510,9 @@ const Admin = () => {
     setIsResettingStudentVote(true)
 
     try {
-      if (student.hasVoted) {
-        // Student has voted: call resetStudentVote to clear vote and locks
-        const resetStudentVote = httpsCallable(functions, 'resetStudentVote')
-        await resetStudentVote({ studentId: student.studentId })
-        setVoterMessage(`Vote reset for ${student.name}. They can vote again now.`)
-      } else {
-        // Student hasn't voted: call clearStudentVoteLocks to just clear locks
-        const clearStudentVoteLocks = httpsCallable(functions, 'clearStudentVoteLocks')
-        const result = await clearStudentVoteLocks({ studentId: student.studentId })
-        setVoterMessage(`Cleared ${result.data.locksCleared} vote lock(s) for ${student.name}. They can now vote.`)
-      }
+      const resetStudentVote = httpsCallable(functions, 'resetStudentVote')
+      await resetStudentVote({ studentId: student.studentId })
+      setVoterMessage(`Vote reset for ${student.name}. They can vote again now.`)
       await loadStudents()
     } catch (resetError) {
       console.error('Failed to reset:', resetError)
@@ -599,10 +554,9 @@ const Admin = () => {
     setIsResettingVotes(true)
 
     const resetFromClient = async () => {
-      const [votesSnapshot, studentsSnapshot, browserLocksSnapshot] = await Promise.all([
+      const [votesSnapshot, studentsSnapshot] = await Promise.all([
         getDocs(collection(db, 'votes')),
         getDocs(collection(db, 'students')),
-        getDocs(collection(db, 'browserVoteLocks')),
       ])
 
       let batch = writeBatch(db)
@@ -619,12 +573,6 @@ const Admin = () => {
 
       for (const voteDoc of votesSnapshot.docs) {
         batch.delete(voteDoc.ref)
-        operations += 1
-        await queueCommit()
-      }
-
-      for (const browserLockDoc of browserLocksSnapshot.docs) {
-        batch.delete(browserLockDoc.ref)
         operations += 1
         await queueCommit()
       }
@@ -757,7 +705,6 @@ const Admin = () => {
               { id: 'results', label: 'Results', icon: '📈' },
               { id: 'candidates', label: 'Candidates', icon: '👥' },
               { id: 'voters', label: 'Voters', icon: '🗳️' },
-              { id: 'security', label: 'Security Logs', icon: '🛡️' },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -1120,13 +1067,15 @@ const Admin = () => {
                               >
                                 Edit
                               </button>
-                              <button
-                                onClick={() => handleResetStudentVote(student)}
-                                disabled={isResettingStudentVote}
-                                className="text-blue-600 hover:text-blue-800 font-semibold disabled:opacity-70"
-                              >
-                                Reset
-                              </button>
+                              {student.hasVoted && (
+                                <button
+                                  onClick={() => handleResetStudentVote(student)}
+                                  disabled={isResettingStudentVote}
+                                  className="text-blue-600 hover:text-blue-800 font-semibold disabled:opacity-70"
+                                >
+                                  Reset
+                                </button>
+                              )}
                               <button
                                 onClick={() => handleDeleteStudent(student)}
                                 disabled={isDeletingStudent}
@@ -1285,84 +1234,6 @@ const Admin = () => {
                     </div>
                   </div>
                 )}
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'security' && (
-            <div>
-              <div className="mb-4 sm:mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Security Logs</h2>
-                  <p className="text-sm text-gray-600 mt-1">Latest verification traces and duplicate-attempt signals.</p>
-                </div>
-                <button
-                  onClick={loadSecurityLogs}
-                  disabled={isLoadingSecurityLogs}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl text-sm sm:text-base font-semibold transition disabled:opacity-70"
-                >
-                  {isLoadingSecurityLogs ? 'Refreshing...' : 'Refresh Logs'}
-                </button>
-              </div>
-
-              {securityMessage && (
-                <p className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-4">
-                  {securityMessage}
-                </p>
-              )}
-
-              <div className="border border-gray-200 rounded-2xl sm:rounded-3xl overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[860px]">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">Time</th>
-                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">Event</th>
-                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">Student ID</th>
-                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">IP</th>
-                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">Device</th>
-                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">Browser</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {isLoadingSecurityLogs && (
-                        <tr>
-                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-600" colSpan={6}>Loading security logs...</td>
-                        </tr>
-                      )}
-
-                      {!isLoadingSecurityLogs && securityLogs.length === 0 && (
-                        <tr>
-                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-600" colSpan={6}>No security logs yet.</td>
-                        </tr>
-                      )}
-
-                      {!isLoadingSecurityLogs && securityLogs.map((log) => (
-                        <tr key={log.id}>
-                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900 whitespace-nowrap">
-                            {log.createdAt ? log.createdAt.toLocaleString() : 'Pending'}
-                          </td>
-                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900">{log.event}</td>
-                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900 whitespace-nowrap">{log.studentId}</td>
-                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900 whitespace-nowrap">
-                            <div>{log.ipAddress}</div>
-                            <div className="text-xs text-gray-500">{log.ipHash.slice(0, 14)}...</div>
-                          </td>
-                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900">
-                            <span className="inline-block max-w-[180px] truncate" title={log.deviceFingerprint}>
-                              {log.deviceFingerprint}
-                            </span>
-                          </td>
-                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900">
-                            <span className="inline-block max-w-[240px] truncate" title={log.userAgent}>
-                              {log.userAgent}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
               </div>
             </div>
           )}

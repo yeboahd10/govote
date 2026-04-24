@@ -3,7 +3,6 @@ import { httpsCallable } from 'firebase/functions'
 import { collection, doc, getDoc, getDocs } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 import { db, functions } from '../firebase'
-import { getBrowserId, getDeviceFingerprint } from '../utils/browser'
 
 const Details = () => {
   const navigate = useNavigate()
@@ -139,12 +138,9 @@ const Details = () => {
 
     try {
       const verifyStudent = httpsCallable(functions, 'verifyStudent')
-      const deviceFingerprint = await getDeviceFingerprint()
       const response = await verifyStudent({
         fullName: trimmedName,
         studentId: trimmedId,
-        browserId: getBrowserId(),
-        deviceFingerprint,
       })
 
       const studentRecord = response.data.student

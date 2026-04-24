@@ -1,5 +1,4 @@
 import admin from 'firebase-admin';
-import { createHash } from 'node:crypto';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 
 admin.initializeApp();
@@ -49,38 +48,6 @@ const normalizeStudentId = (studentId) =>
     .replace(/\s*\/\s*/g, '/')
     .replace(/\.+$/g, '');
 
-const normalizeBrowserId = (browserId) => normalizeSpaces(browserId).toLowerCase();
-const normalizeDeviceFingerprint = (deviceFingerprint) => normalizeSpaces(deviceFingerprint).toLowerCase();
-
-const buildBrowserLockId = (browserId) =>
-  createHash('sha256').update(browserId).digest('hex');
-
-const buildDeviceLockId = (deviceFingerprint) =>
-  createHash('sha256').update(deviceFingerprint).digest('hex');
-
-const normalizeIpAddress = (ipAddress) =>
-  normalizeSpaces(ipAddress || '')
-    .replace(/^::ffff:/i, '')
-    .replace(/\s+/g, '');
-
-const buildIpHash = (ipAddress) => {
-  const normalizedIp = normalizeIpAddress(ipAddress);
-  return normalizedIp ? createHash('sha256').update(normalizedIp).digest('hex') : '';
-};
-
-const getRequestIp = (request) => {
-  const forwardedFor = request.rawRequest?.headers['x-forwarded-for'];
-
-  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
-    return forwardedFor.split(',')[0].trim();
-  }
-
-  return request.rawRequest?.ip || request.rawRequest?.socket?.remoteAddress || '';
-};
-
-const getUserAgent = (request) =>
-  normalizeSpaces(request.rawRequest?.headers['user-agent'] || '');
-
 const ensureAdmin = async (uid) => {
   if (!uid) {
     throw new HttpsError('unauthenticated', 'Admin authentication is required.');
@@ -129,9 +96,6 @@ export const searchStudents = onCall(async (request) => {
 export const verifyStudent = onCall(async (request) => {
   const fullName = normalizeSpaces(request.data?.fullName);
   const studentId = normalizeStudentId(request.data?.studentId);
-  const browserId = normalizeBrowserId(request.data?.browserId);
-  const deviceFingerprint = normalizeDeviceFingerprint(request.data?.deviceFingerprint);
-  const ipAddress = normalizeIpAddress(getRequestIp(request));
 
   if (await getVotingStatus() === 'paused') {
     throw new HttpsError('failed-precondition', 'Polls are closed now. Check back later.');
@@ -139,31 +103,6 @@ export const verifyStudent = onCall(async (request) => {
 
   if (!fullName || !studentId) {
     throw new HttpsError('invalid-argument', 'Please enter both full name and student ID.');
-  }
-
-  if (!browserId) {
-    throw new HttpsError('invalid-argument', 'This browser could not be verified. Refresh and try again.');
-  }
-
-  if (!deviceFingerprint) {
-    throw new HttpsError('invalid-argument', 'This device could not be verified. Refresh and try again.');
-  }
-
-  const browserLockSnapshot = await db
-    .collection('browserVoteLocks')
-    .doc(buildBrowserLockId(browserId))
-    .get();
-  const deviceLockSnapshot = await db
-    .collection('deviceVoteLocks')
-    .doc(buildDeviceLockId(deviceFingerprint))
-    .get();
-
-  if (browserLockSnapshot.exists) {
-    throw new HttpsError('already-exists', 'You have voted already');
-  }
-
-  if (deviceLockSnapshot.exists) {
-    throw new HttpsError('already-exists', 'You have voted already');
   }
 
   const snapshot = await db
@@ -208,17 +147,6 @@ export const verifyStudent = onCall(async (request) => {
     throw new HttpsError('already-exists', 'This student has already voted.');
   }
 
-  await db.collection('securityLogs').add({
-    event: 'verifyStudent_passed',
-    studentId,
-    browserIdNormalized: browserId,
-    deviceFingerprint,
-    ipAddress,
-    ipHash: buildIpHash(ipAddress),
-    userAgent: getUserAgent(request),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
   return {
     student: {
       id: studentDoc.id,
@@ -231,23 +159,15 @@ export const verifyStudent = onCall(async (request) => {
 export const submitVote = onCall(async (request) => {
   const fullName = normalizeSpaces(request.data?.fullName);
   const studentId = normalizeStudentId(request.data?.studentId);
-  const browserId = normalizeBrowserId(request.data?.browserId);
-  const deviceFingerprint = normalizeDeviceFingerprint(request.data?.deviceFingerprint);
   const selections = request.data?.selections || {};
-  const ipAddress = normalizeIpAddress(getRequestIp(request));
-  const ipHash = buildIpHash(ipAddress);
-  const userAgent = getUserAgent(request);
 
-  if (!fullName || !studentId || !browserId || !deviceFingerprint || typeof selections !== 'object') {
+  if (!fullName || !studentId || typeof selections !== 'object') {
     throw new HttpsError('invalid-argument', 'A valid student identity and selections are required.');
   }
 
   if (await getVotingStatus() === 'paused') {
     throw new HttpsError('failed-precondition', 'Polls are closed now. Check back later.');
   }
-
-  const browserLockRef = db.collection('browserVoteLocks').doc(buildBrowserLockId(browserId));
-  const deviceLockRef = db.collection('deviceVoteLocks').doc(buildDeviceLockId(deviceFingerprint));
 
   const studentSnapshot = await db
     .collection('students')
@@ -262,7 +182,12 @@ export const submitVote = onCall(async (request) => {
   const studentDoc = studentSnapshot.docs[0];
   const student = studentDoc.data();
 
-  if (student.nameNormalized !== normalizeName(fullName)) {
+  const submittedSorted = normalizeName(fullName);
+  const submittedSimple = normalizeNameSimple(fullName);
+  const storedNormalized = student.nameNormalized || '';
+  const storedSimple = normalizeNameSimple(student.name || '');
+
+  if (submittedSorted !== storedNormalized && submittedSimple !== storedSimple) {
     throw new HttpsError('failed-precondition', 'Name does not match this student ID.');
   }
 
@@ -294,60 +219,17 @@ export const submitVote = onCall(async (request) => {
   }
 
   await db.runTransaction(async (transaction) => {
-    const [freshStudentSnapshot, browserLockSnapshot, deviceLockSnapshot] = await Promise.all([
-      transaction.get(studentDoc.ref),
-      transaction.get(browserLockRef),
-      transaction.get(deviceLockRef),
-    ]);
+    const freshStudentSnapshot = await transaction.get(studentDoc.ref);
     const freshStudent = freshStudentSnapshot.data();
 
     if (!freshStudent || freshStudent.hasVoted) {
       throw new HttpsError('already-exists', 'This student has already voted.');
     }
 
-    if (browserLockSnapshot.exists) {
-      throw new HttpsError('already-exists', 'You have voted already');
-    }
-
-    if (deviceLockSnapshot.exists) {
-      throw new HttpsError('already-exists', 'You have voted already');
-    }
-
     transaction.set(db.collection('votes').doc(studentDoc.id), {
       studentId: student.studentId,
       studentName: student.name,
       selections,
-      browserIdNormalized: browserId,
-      deviceFingerprint,
-      ipAddress,
-      ipHash,
-      userAgent,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    transaction.set(browserLockRef, {
-      studentId: student.studentId,
-      studentName: student.name,
-      voteId: studentDoc.id,
-      browserIdNormalized: browserId,
-      deviceFingerprint,
-      ipAddress,
-      ipHash,
-      userAgent,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    transaction.set(deviceLockRef, {
-      studentId: student.studentId,
-      studentName: student.name,
-      voteId: studentDoc.id,
-      browserIdNormalized: browserId,
-      deviceFingerprint,
-      ipAddress,
-      ipHash,
-      userAgent,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -365,11 +247,9 @@ export const submitVote = onCall(async (request) => {
 export const resetVoting = onCall(async (request) => {
   await ensureAdmin(request.auth?.uid);
 
-  const [votesSnapshot, studentsSnapshot, browserLocksSnapshot, deviceLocksSnapshot] = await Promise.all([
+  const [votesSnapshot, studentsSnapshot] = await Promise.all([
     db.collection('votes').get(),
     db.collection('students').get(),
-    db.collection('browserVoteLocks').get(),
-    db.collection('deviceVoteLocks').get(),
   ]);
 
   let batch = db.batch();
@@ -387,16 +267,6 @@ export const resetVoting = onCall(async (request) => {
 
   votesSnapshot.docs.forEach((voteDoc) => {
     batch.delete(voteDoc.ref);
-    queueOperation();
-  });
-
-  browserLocksSnapshot.docs.forEach((browserLockDoc) => {
-    batch.delete(browserLockDoc.ref);
-    queueOperation();
-  });
-
-  deviceLocksSnapshot.docs.forEach((deviceLockDoc) => {
-    batch.delete(deviceLockDoc.ref);
     queueOperation();
   });
 
@@ -446,16 +316,9 @@ export const resetStudentVote = onCall(async (request) => {
   // Find and delete the vote record
   const voteSnapshot = await db.collection('votes').doc(studentDoc.id).get();
   if (voteSnapshot.exists) {
-    const voteData = voteSnapshot.data();
-    // Find browserVoteLock and deviceVoteLock using the data from the vote
-    const browserLockId = buildBrowserLockId(voteData.browserIdNormalized);
-    const deviceLockId = buildDeviceLockId(voteData.deviceFingerprint);
-
     // Use transaction to ensure consistency
     await db.runTransaction(async (transaction) => {
       transaction.delete(voteSnapshot.ref);
-      transaction.delete(db.collection('browserVoteLocks').doc(browserLockId));
-      transaction.delete(db.collection('deviceVoteLocks').doc(deviceLockId));
       transaction.update(studentDoc.ref, {
         hasVoted: false,
         status: 'Not Voted',
@@ -554,70 +417,5 @@ export const repairStudentData = onCall(async (request) => {
     repaired,
     issues: issues.slice(0, 50), // Return first 50 issues for display
     totalIssues: issues.length,
-  };
-});
-export const clearStudentVoteLocks = onCall(async (request) => {
-  await ensureAdmin(request.auth?.uid);
-
-  const studentId = normalizeStudentId(request.data?.studentId);
-  if (!studentId) {
-    throw new HttpsError('invalid-argument', 'Student ID is required.');
-  }
-
-  // Find the student
-  const studentSnapshot = await db
-    .collection('students')
-    .where('studentIdNormalized', '==', studentId)
-    .limit(1)
-    .get();
-
-  if (studentSnapshot.empty) {
-    throw new HttpsError('not-found', 'Student not found.');
-  }
-
-  const student = studentSnapshot.docs[0].data();
-
-  // Find all vote locks for this student by querying on studentId field
-  const [browserLocksSnapshot, deviceLocksSnapshot] = await Promise.all([
-    db.collection('browserVoteLocks').where('studentId', '==', student.studentId).get(),
-    db.collection('deviceVoteLocks').where('studentId', '==', student.studentId).get(),
-  ]);
-
-  let batch = db.batch();
-  let operations = 0;
-  const commits = [];
-
-  const queueOperation = () => {
-    operations += 1;
-    if (operations === 450) {
-      commits.push(batch.commit());
-      batch = db.batch();
-      operations = 0;
-    }
-  };
-
-  let locksCleared = 0;
-
-  for (const lockDoc of browserLocksSnapshot.docs) {
-    batch.delete(lockDoc.ref);
-    locksCleared++;
-    queueOperation();
-  }
-
-  for (const lockDoc of deviceLocksSnapshot.docs) {
-    batch.delete(lockDoc.ref);
-    locksCleared++;
-    queueOperation();
-  }
-
-  if (operations > 0) {
-    commits.push(batch.commit());
-  }
-
-  await Promise.all(commits);
-
-  return {
-    success: true,
-    locksCleared,
   };
 });
