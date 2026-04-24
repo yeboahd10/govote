@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, limit, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore'
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
 import jsPDF from 'jspdf'
@@ -45,6 +45,9 @@ const Admin = () => {
   const [resultsMessage, setResultsMessage] = useState('')
   const [isResettingVotes, setIsResettingVotes] = useState(false)
   const [isDeletingStudent, setIsDeletingStudent] = useState(false)
+  const [securityLogs, setSecurityLogs] = useState([])
+  const [isLoadingSecurityLogs, setIsLoadingSecurityLogs] = useState(false)
+  const [securityMessage, setSecurityMessage] = useState('')
 
   const votersPerPage = 10
   const totalVoterPages = Math.max(1, Math.ceil(students.length / votersPerPage))
@@ -149,6 +152,37 @@ const Admin = () => {
     }
   }, [loadCandidates])
 
+  const loadSecurityLogs = useCallback(async () => {
+    setIsLoadingSecurityLogs(true)
+    setSecurityMessage('')
+
+    try {
+      const logsQuery = query(collection(db, 'securityLogs'), orderBy('createdAt', 'desc'), limit(100))
+      const logsSnapshot = await getDocs(logsQuery)
+      const logRows = logsSnapshot.docs.map((logDoc) => {
+        const data = logDoc.data()
+        return {
+          id: logDoc.id,
+          event: data.event ?? 'unknown',
+          studentId: data.studentId ?? '-',
+          ipAddress: data.ipAddress ?? '-',
+          ipHash: data.ipHash ?? '-',
+          userAgent: data.userAgent ?? '-',
+          browserIdNormalized: data.browserIdNormalized ?? '-',
+          deviceFingerprint: data.deviceFingerprint ?? '-',
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : null,
+        }
+      })
+
+      setSecurityLogs(logRows)
+    } catch (logsError) {
+      console.error('Failed to load security logs:', logsError)
+      setSecurityMessage('Could not load security logs from Firestore.')
+    } finally {
+      setIsLoadingSecurityLogs(false)
+    }
+  }, [])
+
   useEffect(() => {
     const loadInitialData = async () => {
       await auth.authStateReady()
@@ -187,7 +221,10 @@ const Admin = () => {
     if (activeTab === 'results') {
       loadResults()
     }
-  }, [activeTab, loadCandidates, loadResults, loadStudents])
+    if (activeTab === 'security') {
+      loadSecurityLogs()
+    }
+  }, [activeTab, loadCandidates, loadResults, loadSecurityLogs, loadStudents])
 
   const closeCandidateModal = () => {
     setIsCandidateModalOpen(false)
@@ -1126,6 +1163,84 @@ const Admin = () => {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'security' && (
+            <div>
+              <div className="mb-4 sm:mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Security Logs</h2>
+                  <p className="text-sm text-gray-600 mt-1">Latest verification traces and duplicate-attempt signals.</p>
+                </div>
+                <button
+                  onClick={loadSecurityLogs}
+                  disabled={isLoadingSecurityLogs}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl text-sm sm:text-base font-semibold transition disabled:opacity-70"
+                >
+                  {isLoadingSecurityLogs ? 'Refreshing...' : 'Refresh Logs'}
+                </button>
+              </div>
+
+              {securityMessage && (
+                <p className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-4">
+                  {securityMessage}
+                </p>
+              )}
+
+              <div className="border border-gray-200 rounded-2xl sm:rounded-3xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[860px]">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">Time</th>
+                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">Event</th>
+                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">Student ID</th>
+                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">IP</th>
+                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">Device</th>
+                        <th className="px-4 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">Browser</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {isLoadingSecurityLogs && (
+                        <tr>
+                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-600" colSpan={6}>Loading security logs...</td>
+                        </tr>
+                      )}
+
+                      {!isLoadingSecurityLogs && securityLogs.length === 0 && (
+                        <tr>
+                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-600" colSpan={6}>No security logs yet.</td>
+                        </tr>
+                      )}
+
+                      {!isLoadingSecurityLogs && securityLogs.map((log) => (
+                        <tr key={log.id}>
+                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900 whitespace-nowrap">
+                            {log.createdAt ? log.createdAt.toLocaleString() : 'Pending'}
+                          </td>
+                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900">{log.event}</td>
+                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900 whitespace-nowrap">{log.studentId}</td>
+                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900 whitespace-nowrap">
+                            <div>{log.ipAddress}</div>
+                            <div className="text-xs text-gray-500">{log.ipHash.slice(0, 14)}...</div>
+                          </td>
+                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900">
+                            <span className="inline-block max-w-[180px] truncate" title={log.deviceFingerprint}>
+                              {log.deviceFingerprint}
+                            </span>
+                          </td>
+                          <td className="px-4 sm:px-6 py-4 text-sm text-gray-900">
+                            <span className="inline-block max-w-[240px] truncate" title={log.userAgent}>
+                              {log.userAgent}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}

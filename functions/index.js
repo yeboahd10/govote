@@ -44,9 +44,23 @@ const normalizeStudentId = (studentId) =>
     .replace(/\.+$/g, '');
 
 const normalizeBrowserId = (browserId) => normalizeSpaces(browserId).toLowerCase();
+const normalizeDeviceFingerprint = (deviceFingerprint) => normalizeSpaces(deviceFingerprint).toLowerCase();
 
 const buildBrowserLockId = (browserId) =>
   createHash('sha256').update(browserId).digest('hex');
+
+const buildDeviceLockId = (deviceFingerprint) =>
+  createHash('sha256').update(deviceFingerprint).digest('hex');
+
+const normalizeIpAddress = (ipAddress) =>
+  normalizeSpaces(ipAddress || '')
+    .replace(/^::ffff:/i, '')
+    .replace(/\s+/g, '');
+
+const buildIpHash = (ipAddress) => {
+  const normalizedIp = normalizeIpAddress(ipAddress);
+  return normalizedIp ? createHash('sha256').update(normalizedIp).digest('hex') : '';
+};
 
 const getRequestIp = (request) => {
   const forwardedFor = request.rawRequest?.headers['x-forwarded-for'];
@@ -110,6 +124,8 @@ export const verifyStudent = onCall(async (request) => {
   const fullName = normalizeSpaces(request.data?.fullName);
   const studentId = normalizeStudentId(request.data?.studentId);
   const browserId = normalizeBrowserId(request.data?.browserId);
+  const deviceFingerprint = normalizeDeviceFingerprint(request.data?.deviceFingerprint);
+  const ipAddress = normalizeIpAddress(getRequestIp(request));
 
   if (await getVotingStatus() === 'paused') {
     throw new HttpsError('failed-precondition', 'Polls are closed now. Check back later.');
@@ -123,12 +139,24 @@ export const verifyStudent = onCall(async (request) => {
     throw new HttpsError('invalid-argument', 'This browser could not be verified. Refresh and try again.');
   }
 
+  if (!deviceFingerprint) {
+    throw new HttpsError('invalid-argument', 'This device could not be verified. Refresh and try again.');
+  }
+
   const browserLockSnapshot = await db
     .collection('browserVoteLocks')
     .doc(buildBrowserLockId(browserId))
     .get();
+  const deviceLockSnapshot = await db
+    .collection('deviceVoteLocks')
+    .doc(buildDeviceLockId(deviceFingerprint))
+    .get();
 
   if (browserLockSnapshot.exists) {
+    throw new HttpsError('already-exists', 'You have voted already');
+  }
+
+  if (deviceLockSnapshot.exists) {
     throw new HttpsError('already-exists', 'You have voted already');
   }
 
@@ -153,6 +181,17 @@ export const verifyStudent = onCall(async (request) => {
     throw new HttpsError('already-exists', 'This student has already voted.');
   }
 
+  await db.collection('securityLogs').add({
+    event: 'verifyStudent_passed',
+    studentId,
+    browserIdNormalized: browserId,
+    deviceFingerprint,
+    ipAddress,
+    ipHash: buildIpHash(ipAddress),
+    userAgent: getUserAgent(request),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
   return {
     student: {
       id: studentDoc.id,
@@ -166,11 +205,13 @@ export const submitVote = onCall(async (request) => {
   const fullName = normalizeSpaces(request.data?.fullName);
   const studentId = normalizeStudentId(request.data?.studentId);
   const browserId = normalizeBrowserId(request.data?.browserId);
+  const deviceFingerprint = normalizeDeviceFingerprint(request.data?.deviceFingerprint);
   const selections = request.data?.selections || {};
-  const ipAddress = getRequestIp(request);
+  const ipAddress = normalizeIpAddress(getRequestIp(request));
+  const ipHash = buildIpHash(ipAddress);
   const userAgent = getUserAgent(request);
 
-  if (!fullName || !studentId || !browserId || typeof selections !== 'object') {
+  if (!fullName || !studentId || !browserId || !deviceFingerprint || typeof selections !== 'object') {
     throw new HttpsError('invalid-argument', 'A valid student identity and selections are required.');
   }
 
@@ -179,6 +220,7 @@ export const submitVote = onCall(async (request) => {
   }
 
   const browserLockRef = db.collection('browserVoteLocks').doc(buildBrowserLockId(browserId));
+  const deviceLockRef = db.collection('deviceVoteLocks').doc(buildDeviceLockId(deviceFingerprint));
 
   const studentSnapshot = await db
     .collection('students')
@@ -225,9 +267,10 @@ export const submitVote = onCall(async (request) => {
   }
 
   await db.runTransaction(async (transaction) => {
-    const [freshStudentSnapshot, browserLockSnapshot] = await Promise.all([
+    const [freshStudentSnapshot, browserLockSnapshot, deviceLockSnapshot] = await Promise.all([
       transaction.get(studentDoc.ref),
       transaction.get(browserLockRef),
+      transaction.get(deviceLockRef),
     ]);
     const freshStudent = freshStudentSnapshot.data();
 
@@ -239,12 +282,18 @@ export const submitVote = onCall(async (request) => {
       throw new HttpsError('already-exists', 'You have voted already');
     }
 
+    if (deviceLockSnapshot.exists) {
+      throw new HttpsError('already-exists', 'You have voted already');
+    }
+
     transaction.set(db.collection('votes').doc(studentDoc.id), {
       studentId: student.studentId,
       studentName: student.name,
       selections,
       browserIdNormalized: browserId,
+      deviceFingerprint,
       ipAddress,
+      ipHash,
       userAgent,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -255,7 +304,22 @@ export const submitVote = onCall(async (request) => {
       studentName: student.name,
       voteId: studentDoc.id,
       browserIdNormalized: browserId,
+      deviceFingerprint,
       ipAddress,
+      ipHash,
+      userAgent,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    transaction.set(deviceLockRef, {
+      studentId: student.studentId,
+      studentName: student.name,
+      voteId: studentDoc.id,
+      browserIdNormalized: browserId,
+      deviceFingerprint,
+      ipAddress,
+      ipHash,
       userAgent,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -274,10 +338,11 @@ export const submitVote = onCall(async (request) => {
 export const resetVoting = onCall(async (request) => {
   await ensureAdmin(request.auth?.uid);
 
-  const [votesSnapshot, studentsSnapshot, browserLocksSnapshot] = await Promise.all([
+  const [votesSnapshot, studentsSnapshot, browserLocksSnapshot, deviceLocksSnapshot] = await Promise.all([
     db.collection('votes').get(),
     db.collection('students').get(),
     db.collection('browserVoteLocks').get(),
+    db.collection('deviceVoteLocks').get(),
   ]);
 
   let batch = db.batch();
@@ -300,6 +365,11 @@ export const resetVoting = onCall(async (request) => {
 
   browserLocksSnapshot.docs.forEach((browserLockDoc) => {
     batch.delete(browserLockDoc.ref);
+    queueOperation();
+  });
+
+  deviceLocksSnapshot.docs.forEach((deviceLockDoc) => {
+    batch.delete(deviceLockDoc.ref);
     queueOperation();
   });
 

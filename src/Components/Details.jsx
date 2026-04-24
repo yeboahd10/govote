@@ -3,7 +3,7 @@ import { httpsCallable } from 'firebase/functions'
 import { collection, doc, getDoc, getDocs } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 import { db, functions } from '../firebase'
-import { getBrowserId } from '../utils/browser'
+import { getBrowserId, getDeviceFingerprint } from '../utils/browser'
 
 const Details = () => {
   const navigate = useNavigate()
@@ -139,10 +139,12 @@ const Details = () => {
 
     try {
       const verifyStudent = httpsCallable(functions, 'verifyStudent')
+      const deviceFingerprint = await getDeviceFingerprint()
       const response = await verifyStudent({
         fullName: trimmedName,
         studentId: trimmedId,
         browserId: getBrowserId(),
+        deviceFingerprint,
       })
 
       const studentRecord = response.data.student
@@ -220,7 +222,7 @@ const Details = () => {
               {showSuggestions && (
                 <ul
                   ref={suggestionsRef}
-                  className="absolute z-50 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-xl overflow-hidden max-h-60 overflow-y-auto"
+                  className="mt-2 w-full bg-white border border-gray-200 rounded-2xl shadow-xl overflow-hidden max-h-60 overflow-y-auto"
                 >
                   {suggestions.map((suggestion, index) => (
                     <li
